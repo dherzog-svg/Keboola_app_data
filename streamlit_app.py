@@ -4,7 +4,11 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
-from kai_client import KaiClient
+try:
+    from kai_client import KaiClient
+    KAI_AVAILABLE = True
+except ImportError:
+    KAI_AVAILABLE = False
 # ### INJECTED_CODE ####
 # ### QUERY DATA FUNCTION ####
 import os
@@ -76,7 +80,7 @@ STORAGE_API_URL = os.environ.get("STORAGE_API_URL") or os.environ.get("KBC_URL",
 if "kai_messages" not in st.session_state:
     st.session_state.kai_messages = []
 if "kai_chat_id" not in st.session_state:
-    st.session_state.kai_chat_id = KaiClient.new_chat_id()
+    st.session_state.kai_chat_id = KaiClient.new_chat_id() if KAI_AVAILABLE else None
 if "pending_approval" not in st.session_state:
     st.session_state.pending_approval = None
 if "pending_prompt" not in st.session_state:
@@ -892,6 +896,9 @@ with tab_cohort:
 with tab_kai:
     st.header("🤖 Ask Kai about INTL Markets Data")
     st.markdown("Chat with Kai AI to analyze your data across all three tables — user behaviour, financial performance, and cohorts.")
+    if not KAI_AVAILABLE:
+        st.warning("Kai AI is not available in this environment (kai_client module not found).")
+        st.stop()
 
     with st.expander("🔧 Debug Info"):
         st.write(f"**Token available:** {'Yes ✓' if STORAGE_API_TOKEN else 'No ✗'}")
