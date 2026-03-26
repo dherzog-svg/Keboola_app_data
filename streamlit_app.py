@@ -304,12 +304,12 @@ with st.sidebar:
         list(coh_df_raw['country'].dropna().unique() if not coh_df_raw.empty else [])
     ))
     st.markdown('<p class="section-label">Markets</p>', unsafe_allow_html=True)
-    country_options = ["All Markets"] + all_countries
-    sel_country = st.selectbox(
-        "Select market", options=country_options, index=0,
+    selected_countries = st.multiselect(
+        "Select markets", options=all_countries, default=all_countries,
         label_visibility="collapsed", key="global_countries"
     )
-    selected_countries = all_countries if sel_country == "All Markets" else [sel_country]
+    if not selected_countries:
+        selected_countries = all_countries
 
     st.markdown("---")
     st.markdown('<p class="section-label">Financial Tab</p>', unsafe_allow_html=True)
@@ -323,10 +323,11 @@ with st.sidebar:
         start_d, end_d = (date_range[0], date_range[1]) if len(date_range) == 2 else (min_d, max_d)
 
         all_platforms = sorted(fin_df_raw['client_platform'].dropna().unique())
-        sel_platform = st.selectbox(
-            "Platform", options=["All Platforms"] + all_platforms, index=0, key="fin_platforms"
+        sel_platforms = st.multiselect(
+            "Platform", options=all_platforms, default=all_platforms, key="fin_platforms"
         )
-        sel_platforms = all_platforms if sel_platform == "All Platforms" else [sel_platform]
+        if not sel_platforms:
+            sel_platforms = all_platforms
     else:
         start_d, end_d, sel_platforms = None, None, []
 
@@ -335,12 +336,11 @@ with st.sidebar:
 
     if not coh_df_raw.empty:
         available_weeks = sorted(coh_df_raw['cohort_week'].dt.date.unique())
-        week_labels = {str(w): w for w in available_weeks}
-        sel_week = st.selectbox(
-            "Cohort week", options=["All Weeks"] + [str(w) for w in available_weeks],
-            index=0, key="coh_weeks"
+        sel_weeks = st.multiselect(
+            "Cohort weeks", options=available_weeks, default=available_weeks, key="coh_weeks"
         )
-        sel_weeks = available_weeks if sel_week == "All Weeks" else [week_labels[sel_week]]
+        if not sel_weeks:
+            sel_weeks = available_weeks
     else:
         sel_weeks = []
 
@@ -427,11 +427,11 @@ with tab_behaviour:
         st.markdown("---")
 
         # --- Market Leaderboard ---
-        st.markdown("### Market Leaderboard")
-        st.markdown('<p class="section-label">Ranked by M1 VFM — the primary profitability signal</p>', unsafe_allow_html=True)
-
-        lb_cols = st.columns([3, 1])
-        with lb_cols[1]:
+        hdr_col, sel_col = st.columns([2, 1])
+        with hdr_col:
+            st.markdown("### Market Leaderboard")
+            st.markdown('<p class="section-label">Ranked by M1 VFM — the primary profitability signal</p>', unsafe_allow_html=True)
+        with sel_col:
             lb_metric_options = {
                 'M1 VFM (USD)': 'm1vfm_usd',
                 'Gross Bookings (USD)': 'gross_bookings_usd',
