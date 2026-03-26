@@ -446,9 +446,9 @@ with tab_behaviour:
             lb_metric_name = st.selectbox("Rank by", list(lb_metric_options.keys()), index=0, key="beh_lb_metric")
             lb_metric = lb_metric_options[lb_metric_name]
 
-        chart_df = beh_df[['country', lb_metric]].sort_values(lb_metric, ascending=True)
+        chart_df = beh_df[['country', lb_metric]].sort_values(lb_metric, ascending=False)
         fig_lb = px.bar(
-            chart_df, y='country', x=lb_metric, orientation='h',
+            chart_df, x='country', y=lb_metric,
             color=lb_metric, color_continuous_scale='Blues',
             text=lb_metric,
             labels={'country': '', lb_metric: lb_metric_name}
