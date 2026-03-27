@@ -381,11 +381,8 @@ else:
 # =============================================================================
 # PAGE HEADER
 # =============================================================================
-st.markdown("# 🌍 INTL Markets — Executive Dashboard")
-st.markdown(
-    f"Showing **{len(selected_countries)} market{'s' if len(selected_countries) != 1 else ''}**. "
-    "Use the sidebar to filter by market, date range, or platform."
-)
+st.markdown("# 🌍 INTL APP Markets by countries")
+st.markdown("Use the sidebar to filter by market, date range, or platform.")
 
 tab_behaviour, tab_financial, tab_cohort, tab_kai = st.tabs([
     "🧠 User Behaviour",
