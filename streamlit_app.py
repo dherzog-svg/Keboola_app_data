@@ -306,12 +306,16 @@ with st.sidebar:
     # Default to countries that appear in financial data (active Groupon markets)
     core_countries = sorted(fin_df_raw['country_upper'].dropna().unique()) if not fin_df_raw.empty else all_countries
     st.markdown('<p class="section-label">Markets</p>', unsafe_allow_html=True)
-    selected_countries = st.multiselect(
-        "Select markets", options=all_countries, default=core_countries,
-        label_visibility="collapsed", key="global_countries"
-    )
-    if not selected_countries:
-        selected_countries = all_countries
+    select_all_mkts = st.checkbox("Select all", value=True, key="select_all_mkts")
+    if select_all_mkts:
+        selected_countries = core_countries
+    else:
+        selected_countries = st.multiselect(
+            "Select markets", options=all_countries, default=core_countries,
+            label_visibility="collapsed", key="global_countries"
+        )
+        if not selected_countries:
+            selected_countries = core_countries
 
     st.markdown("---")
     st.markdown('<p class="section-label">Financial Tab</p>', unsafe_allow_html=True)
@@ -399,6 +403,7 @@ tab_behaviour, tab_financial, tab_cohort, tab_kai = st.tabs([
 # TAB 1 — USER BEHAVIOUR
 # =============================================================================
 with tab_behaviour:
+    st.caption("Rolling snapshot — not controlled by the sidebar date filter. Filtered by selected markets.")
     if beh_df.empty:
         st.warning("No user behaviour data available for the selected markets.")
     else:
@@ -420,8 +425,8 @@ with tab_behaviour:
 
         k5, k6, k7, k8 = st.columns(4)
         k5.metric("Gross Bookings", f"${total_gb:,.0f}")
-        k6.metric("Avg Conversion Rate", f"{avg_cvr:.3f}")
-        k7.metric("Avg M1 VFM per UV", f"${avg_m1_per_uv:.4f}")
+        k6.metric("Avg Conversion Rate", f"{avg_cvr:.2%}")
+        k7.metric("Avg M1 VFM per UV", f"${avg_m1_per_uv:.2f}")
         k8.metric("Markets in View", beh_df['country'].nunique())
 
         st.markdown("---")
@@ -453,7 +458,20 @@ with tab_behaviour:
             text=lb_metric,
             labels={'country': '', lb_metric: lb_metric_name}
         )
-        fmt = '$%{text:,.0f}' if 'USD' in lb_metric_name or 'VFM' in lb_metric_name or 'Bookings' in lb_metric_name else '%{text:,.2f}'
+        fmt_map = {
+            'm1vfm_usd': '$%{text:,.0f}',
+            'gross_bookings_usd': '$%{text:,.0f}',
+            'uv': '%{text:,.0f}',
+            'active_uv': '%{text:,.0f}',
+            'nob': '%{text:,.0f}',
+            'cvr': '%{text:.4f}',
+            'm1vfm_per_active_uv': '$%{text:.2f}',
+            'm1vfm_per_uv': '$%{text:.2f}',
+            'gross_bookings_per_active_uv': '$%{text:.2f}',
+            'gross_bookings_per_uv': '$%{text:.2f}',
+            'active_uv_rate_pct': '%{text:.1f}%',
+        }
+        fmt = fmt_map.get(lb_metric, '%{text:,.2f}')
         fig_lb.update_traces(texttemplate=fmt, textposition='outside')
         fig_lb.update_layout(height=420, coloraxis_showscale=False, margin=dict(l=0, r=80, t=20, b=20))
         st.plotly_chart(fig_lb, use_container_width=True)
@@ -576,44 +594,48 @@ with tab_financial:
 
         st.markdown("---")
 
-        # --- Revenue Trend ---
-        st.markdown("### Revenue Trend")
-        tc1, tc2, tc3 = st.columns([2, 1, 1])
-        with tc1:
-            trend_options = {
-                'Gross Bookings (USD)': 'gross_bookings',
-                'M1 VFM (USD)': 'm1_vfm',
-                'M2 Estimate (USD)': 'm2_estimate',
-                'Orders': 'orders',
-                'Activations': 'activations',
-                'Reactivations': 'reactivations',
-            }
-            trend_name = st.selectbox("Metric", list(trend_options.keys()), key="fin_trend_metric")
-            trend_col = trend_options[trend_name]
-        with tc2:
-            by_country = st.checkbox("By market", value=False, key="fin_by_country")
-        with tc3:
-            by_platform = st.checkbox("By platform", value=False, key="fin_by_platform")
+        # --- Revenue Trend (fragment to prevent tab jumping on interaction) ---
+        @st.fragment
+        def revenue_trend():
+            st.markdown("### Revenue Trend")
+            tc1, tc2, tc3 = st.columns([2, 1, 1])
+            with tc1:
+                trend_options = {
+                    'Gross Bookings (USD)': 'gross_bookings',
+                    'M1 VFM (USD)': 'm1_vfm',
+                    'M2 Estimate (USD)': 'm2_estimate',
+                    'Orders': 'orders',
+                    'Activations': 'activations',
+                    'Reactivations': 'reactivations',
+                }
+                trend_name = st.selectbox("Metric", list(trend_options.keys()), key="fin_trend_metric")
+                trend_col = trend_options[trend_name]
+            with tc2:
+                by_country = st.checkbox("By market", value=False, key="fin_by_country")
+            with tc3:
+                by_platform = st.checkbox("By platform", value=False, key="fin_by_platform")
 
-        if by_country:
-            tdf = fin_df.groupby(['order_created_date', 'country_upper'])[trend_col].sum().reset_index()
-            fig_trend = px.line(tdf, x='order_created_date', y=trend_col, color='country_upper',
-                                markers=False,
-                                labels={'order_created_date': '', trend_col: trend_name, 'country_upper': 'Market'})
-        elif by_platform:
-            tdf = fin_df.groupby(['order_created_date', 'client_platform'])[trend_col].sum().reset_index()
-            fig_trend = px.line(tdf, x='order_created_date', y=trend_col, color='client_platform',
-                                markers=False,
-                                color_discrete_map={'iphone': '#007AFF', 'android': '#34C759', 'ipad': '#FF9500'},
-                                labels={'order_created_date': '', trend_col: trend_name, 'client_platform': 'Platform'})
-        else:
-            tdf = fin_df.groupby('order_created_date')[trend_col].sum().reset_index()
-            fig_trend = px.area(tdf, x='order_created_date', y=trend_col,
-                                color_discrete_sequence=['#1f77b4'],
-                                labels={'order_created_date': '', trend_col: trend_name})
+            if by_country:
+                tdf = fin_df.groupby(['order_created_date', 'country_upper'])[trend_col].sum().reset_index()
+                fig_trend = px.line(tdf, x='order_created_date', y=trend_col, color='country_upper',
+                                    markers=False,
+                                    labels={'order_created_date': '', trend_col: trend_name, 'country_upper': 'Market'})
+            elif by_platform:
+                tdf = fin_df.groupby(['order_created_date', 'client_platform'])[trend_col].sum().reset_index()
+                fig_trend = px.line(tdf, x='order_created_date', y=trend_col, color='client_platform',
+                                    markers=False,
+                                    color_discrete_map={'iphone': '#007AFF', 'android': '#34C759', 'ipad': '#FF9500'},
+                                    labels={'order_created_date': '', trend_col: trend_name, 'client_platform': 'Platform'})
+            else:
+                tdf = fin_df.groupby('order_created_date')[trend_col].sum().reset_index()
+                fig_trend = px.area(tdf, x='order_created_date', y=trend_col,
+                                    color_discrete_sequence=['#1f77b4'],
+                                    labels={'order_created_date': '', trend_col: trend_name})
 
-        fig_trend.update_layout(height=380, margin=dict(l=0, r=0, t=10, b=10))
-        st.plotly_chart(fig_trend, use_container_width=True)
+            fig_trend.update_layout(height=380, margin=dict(l=0, r=0, t=10, b=10))
+            st.plotly_chart(fig_trend, use_container_width=True)
+
+        revenue_trend()
 
         st.markdown("---")
 
