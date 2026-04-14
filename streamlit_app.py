@@ -396,6 +396,7 @@ tab_behaviour, tab_financial, tab_cohort, tab_kai = st.tabs([
 # TAB 1 — USER BEHAVIOUR
 # =============================================================================
 with tab_behaviour:
+    st.caption("Based on the last 30 days of data")
     if beh_df.empty:
         st.warning("No user behaviour data available for the selected markets.")
     else:
