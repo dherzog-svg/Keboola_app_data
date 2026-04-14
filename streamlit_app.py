@@ -57,9 +57,9 @@ Before answering ANY analytical or calculation question, you MUST:
 3. **Use the SAME methodology** as the app when answering questions
 
 ## DATA SOURCES YOU HAVE ACCESS TO
-- `user_behaviour_INTL` — snapshot of UV, active UV, CVR, bookings, M1 VFM per country
-- `financial_INTL_app` — daily orders, gross bookings, M1 VFM, M2 estimate, activations, reactivations, refunds, OD/ILS discounts by country × platform (Jan–Mar 2026)
-- `cohort_INTL_app` — weekly cohort CVR and M1 VFM per UV across D1-7, D7-14, D14-28 windows (Feb 2026)
+- `user_behaviour_INTL` — rolling snapshot of UV, active UV, CVR, bookings, M1 VFM per country (data refreshed daily)
+- `financial_INTL_app` — daily orders, gross bookings, M1 VFM, M2 estimate, activations, reactivations, refunds, OD/ILS discounts by country × platform (incremental daily updates)
+- `cohort_INTL_app` — weekly cohort CVR and M1 VFM per UV across D1-7, D7-14, D14-28 windows (incremental, growing history)
 
 ## KEY BUSINESS RULES
 - `od_applied` and `ils_applied` are NEGATIVE numbers — always use abs() for rates/display
@@ -303,9 +303,11 @@ with st.sidebar:
         list(fin_df_raw['country_upper'].dropna().unique() if not fin_df_raw.empty else []) +
         list(coh_df_raw['country'].dropna().unique() if not coh_df_raw.empty else [])
     ))
+    # Default to countries that appear in financial data (active Groupon markets)
+    core_countries = sorted(fin_df_raw['country_upper'].dropna().unique()) if not fin_df_raw.empty else all_countries
     st.markdown('<p class="section-label">Markets</p>', unsafe_allow_html=True)
     selected_countries = st.multiselect(
-        "Select markets", options=all_countries, default=all_countries,
+        "Select markets", options=all_countries, default=core_countries,
         label_visibility="collapsed", key="global_countries"
     )
     if not selected_countries:
@@ -336,8 +338,9 @@ with st.sidebar:
 
     if not coh_df_raw.empty:
         available_weeks = sorted(coh_df_raw['cohort_week'].dt.date.unique())
+        default_weeks = available_weeks[-12:] if len(available_weeks) > 12 else available_weeks
         sel_weeks = st.multiselect(
-            "Cohort weeks", options=available_weeks, default=available_weeks, key="coh_weeks"
+            "Cohort weeks", options=available_weeks, default=default_weeks, key="coh_weeks"
         )
         if not sel_weeks:
             sel_weeks = available_weeks
@@ -396,7 +399,6 @@ tab_behaviour, tab_financial, tab_cohort, tab_kai = st.tabs([
 # TAB 1 — USER BEHAVIOUR
 # =============================================================================
 with tab_behaviour:
-    st.caption("Based on the last 30 days of data")
     if beh_df.empty:
         st.warning("No user behaviour data available for the selected markets.")
     else:
@@ -846,13 +848,11 @@ with tab_cohort:
             st.plotly_chart(fig_vfm, use_container_width=True)
 
         with col_b:
-            uvs_agg = coh_df.copy()
-            uvs_agg['cohort_week_str'] = uvs_agg['cohort_week'].dt.strftime('%b %d')
-            uvs_sum = uvs_agg.groupby(['country', 'cohort_week_str'])['new_uvs'].sum().reset_index()
-            fig_uvs = px.bar(
-                uvs_sum, x='country', y='new_uvs', color='cohort_week_str', barmode='group',
-                title='New UVs by Market & Cohort Week',
-                labels={'country': '', 'new_uvs': 'New UVs', 'cohort_week_str': 'Cohort Week'}
+            uvs_sum = coh_df.groupby(['cohort_week', 'country'])['new_uvs'].sum().reset_index()
+            fig_uvs = px.line(
+                uvs_sum, x='cohort_week', y='new_uvs', color='country', markers=True,
+                title='New UVs by Cohort Week & Market',
+                labels={'cohort_week': '', 'new_uvs': 'New UVs', 'country': 'Market'}
             )
             fig_uvs.update_layout(height=380, margin=dict(l=0, r=0, t=40, b=10))
             st.plotly_chart(fig_uvs, use_container_width=True)
