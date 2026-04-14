@@ -403,7 +403,7 @@ tab_behaviour, tab_financial, tab_cohort, tab_kai = st.tabs([
 # TAB 1 — USER BEHAVIOUR
 # =============================================================================
 with tab_behaviour:
-    st.caption("Rolling snapshot — not controlled by the sidebar date filter. Filtered by selected markets.")
+    st.caption("Rolling 30-day snapshot — not controlled by the sidebar date filter. Filtered by selected markets.")
     if beh_df.empty:
         st.warning("No user behaviour data available for the selected markets.")
     else:
