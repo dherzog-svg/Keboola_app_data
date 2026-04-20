@@ -221,7 +221,7 @@ st.markdown("""
 @st.cache_data(ttl=300)
 def load_behaviour_data():
     df = query_data('''
-    SELECT `country`, `uv`, `active_uv`, `active_uv_rate_pct`, `nob`,
+    SELECT `country`, `client_platform`, `uv`, `active_uv`, `active_uv_rate_pct`, `nob`,
            `m1vfm_usd`, `gross_bookings_usd`, `cvr`,
            `m1vfm_per_active_uv`, `gross_bookings_per_active_uv`,
            `m1vfm_per_uv`, `gross_bookings_per_uv`
@@ -317,6 +317,22 @@ with st.sidebar:
         if not selected_countries:
             selected_countries = core_countries
 
+    # Client platform filter — shared across User Behaviour and Financial tabs
+    st.markdown("---")
+    st.markdown('<p class="section-label">Client Platform</p>', unsafe_allow_html=True)
+    all_platforms = sorted(set(
+        list(beh_df_raw['client_platform'].dropna().unique() if not beh_df_raw.empty else []) +
+        list(fin_df_raw['client_platform'].dropna().unique() if not fin_df_raw.empty else [])
+    ))
+    if all_platforms:
+        sel_platforms = st.multiselect(
+            "Client Platform", options=all_platforms, default=all_platforms, key="global_platforms"
+        )
+        if not sel_platforms:
+            sel_platforms = all_platforms
+    else:
+        sel_platforms = []
+
     st.markdown("---")
     st.markdown('<p class="section-label">Financial Tab</p>', unsafe_allow_html=True)
 
@@ -327,15 +343,8 @@ with st.sidebar:
             "Date range", value=(min_d, max_d), min_value=min_d, max_value=max_d, key="fin_dates"
         )
         start_d, end_d = (date_range[0], date_range[1]) if len(date_range) == 2 else (min_d, max_d)
-
-        all_platforms = sorted(fin_df_raw['client_platform'].dropna().unique())
-        sel_platforms = st.multiselect(
-            "Platform", options=all_platforms, default=all_platforms, key="fin_platforms"
-        )
-        if not sel_platforms:
-            sel_platforms = all_platforms
     else:
-        start_d, end_d, sel_platforms = None, None, []
+        start_d, end_d = None, None
 
     st.markdown("---")
     st.markdown('<p class="section-label">Cohort Tab</p>', unsafe_allow_html=True)
@@ -364,7 +373,13 @@ with st.sidebar:
 # =============================================================================
 # APPLY FILTERS
 # =============================================================================
-beh_df = beh_df_raw[beh_df_raw['country'].isin(selected_countries)].copy() if not beh_df_raw.empty else beh_df_raw
+if not beh_df_raw.empty and sel_platforms:
+    beh_df = beh_df_raw[
+        beh_df_raw['country'].isin(selected_countries) &
+        beh_df_raw['client_platform'].isin(sel_platforms)
+    ].copy()
+else:
+    beh_df = beh_df_raw[beh_df_raw['country'].isin(selected_countries)].copy() if not beh_df_raw.empty else beh_df_raw
 
 if not fin_df_raw.empty and start_d and end_d:
     fin_df = fin_df_raw[
@@ -389,7 +404,7 @@ else:
 # PAGE HEADER
 # =============================================================================
 st.markdown("# 🌍 INTL APP Markets by countries")
-st.markdown("Use the sidebar to filter by market, date range, or platform.")
+st.markdown("Use the sidebar to filter by market, date range, or client platform.")
 
 tab_behaviour, tab_financial, tab_cohort, tab_kai = st.tabs([
     "🧠 User Behaviour",
@@ -403,31 +418,46 @@ tab_behaviour, tab_financial, tab_cohort, tab_kai = st.tabs([
 # TAB 1 — USER BEHAVIOUR
 # =============================================================================
 with tab_behaviour:
-    st.caption("Rolling 30-day snapshot — not controlled by the sidebar date filter. Filtered by selected markets.")
+    st.caption("Rolling 30-day snapshot — not controlled by the sidebar date filter. Filtered by selected markets and client platform.")
     if beh_df.empty:
-        st.warning("No user behaviour data available for the selected markets.")
+        st.warning("No user behaviour data available for the selected filters.")
     else:
+        # Aggregate to country level (data is now country × client_platform)
+        beh_by_country = beh_df.groupby('country').agg(
+            uv=('uv', 'sum'),
+            active_uv=('active_uv', 'sum'),
+            nob=('nob', 'sum'),
+            m1vfm_usd=('m1vfm_usd', 'sum'),
+            gross_bookings_usd=('gross_bookings_usd', 'sum'),
+        ).reset_index()
+        beh_by_country['active_uv_rate_pct'] = (beh_by_country['active_uv'] / beh_by_country['uv'].replace(0, 1) * 100).round(1)
+        beh_by_country['cvr'] = (beh_by_country['nob'] / beh_by_country['active_uv'].replace(0, 1)).round(4)
+        beh_by_country['m1vfm_per_active_uv'] = (beh_by_country['m1vfm_usd'] / beh_by_country['active_uv'].replace(0, 1)).round(4)
+        beh_by_country['gross_bookings_per_active_uv'] = (beh_by_country['gross_bookings_usd'] / beh_by_country['active_uv'].replace(0, 1)).round(4)
+        beh_by_country['m1vfm_per_uv'] = (beh_by_country['m1vfm_usd'] / beh_by_country['uv'].replace(0, 1)).round(4)
+        beh_by_country['gross_bookings_per_uv'] = (beh_by_country['gross_bookings_usd'] / beh_by_country['uv'].replace(0, 1)).round(4)
+
         # --- KPIs ---
-        total_uv      = beh_df['uv'].sum()
-        total_active  = beh_df['active_uv'].sum()
-        total_nob     = beh_df['nob'].sum()
-        total_m1vfm   = beh_df['m1vfm_usd'].sum()
-        total_gb      = beh_df['gross_bookings_usd'].sum()
-        avg_cvr       = beh_df['cvr'].mean()
-        avg_active_rt = beh_df['active_uv_rate_pct'].mean()
-        avg_m1_per_uv = beh_df['m1vfm_per_uv'].mean()
+        total_uv      = beh_by_country['uv'].sum()
+        total_active  = beh_by_country['active_uv'].sum()
+        total_nob     = beh_by_country['nob'].sum()
+        total_m1vfm   = beh_by_country['m1vfm_usd'].sum()
+        total_gb      = beh_by_country['gross_bookings_usd'].sum()
+        overall_cvr       = total_nob / total_active if total_active > 0 else 0
+        overall_active_rt = total_active / total_uv * 100 if total_uv > 0 else 0
+        overall_m1_per_uv = total_m1vfm / total_uv if total_uv > 0 else 0
 
         k1, k2, k3, k4 = st.columns(4)
         k1.metric("Total Unique Visitors", f"{total_uv:,.0f}")
-        k2.metric("Active Visitors", f"{total_active:,.0f}", delta=f"{avg_active_rt:.1f}% active rate")
+        k2.metric("Active Visitors", f"{total_active:,.0f}", delta=f"{overall_active_rt:.1f}% active rate")
         k3.metric("Total Bookings", f"{total_nob:,.0f}")
         k4.metric("M1 VFM", f"${total_m1vfm:,.0f}")
 
         k5, k6, k7, k8 = st.columns(4)
         k5.metric("Gross Bookings", f"${total_gb:,.0f}")
-        k6.metric("Avg Conversion Rate", f"{avg_cvr:.2%}")
-        k7.metric("Avg M1 VFM per UV", f"${avg_m1_per_uv:.2f}")
-        k8.metric("Markets in View", beh_df['country'].nunique())
+        k6.metric("Avg Conversion Rate", f"{overall_cvr:.2%}")
+        k7.metric("Avg M1 VFM per UV", f"${overall_m1_per_uv:.2f}")
+        k8.metric("Markets in View", beh_by_country['country'].nunique())
 
         st.markdown("---")
 
@@ -451,7 +481,7 @@ with tab_behaviour:
             lb_metric_name = st.selectbox("Rank by", list(lb_metric_options.keys()), index=0, key="beh_lb_metric")
             lb_metric = lb_metric_options[lb_metric_name]
 
-        chart_df = beh_df[['country', lb_metric]].sort_values(lb_metric, ascending=False)
+        chart_df = beh_by_country[['country', lb_metric]].sort_values(lb_metric, ascending=False)
         fig_lb = px.bar(
             chart_df, x='country', y=lb_metric,
             color=lb_metric, color_continuous_scale='Blues',
@@ -486,11 +516,11 @@ with tab_behaviour:
             unsafe_allow_html=True
         )
 
-        median_cvr = beh_df['cvr'].median()
-        median_vfm = beh_df['m1vfm_per_active_uv'].median()
+        median_cvr = beh_by_country['cvr'].median()
+        median_vfm = beh_by_country['m1vfm_per_active_uv'].median()
 
         fig_quad = px.scatter(
-            beh_df, x='cvr', y='m1vfm_per_active_uv',
+            beh_by_country, x='cvr', y='m1vfm_per_active_uv',
             size='uv', color='country',
             hover_name='country',
             hover_data={'uv': ':,.0f', 'active_uv': ':,.0f', 'nob': ':,.0f'},
@@ -515,7 +545,7 @@ with tab_behaviour:
         )
 
         fig_aq = px.scatter(
-            beh_df, x='active_uv_rate_pct', y='gross_bookings_per_uv',
+            beh_by_country, x='active_uv_rate_pct', y='gross_bookings_per_uv',
             size='uv', color='country',
             hover_name='country',
             labels={
@@ -530,8 +560,8 @@ with tab_behaviour:
         st.markdown("---")
 
         # --- Data Table ---
-        with st.expander("📋 Full Data Table"):
-            display_df = beh_df.copy().sort_values('m1vfm_usd', ascending=False)
+        with st.expander("📋 Data Table — by Market"):
+            display_df = beh_by_country.sort_values('m1vfm_usd', ascending=False)
             st.dataframe(
                 display_df, use_container_width=True, hide_index=True,
                 column_config={
@@ -549,8 +579,25 @@ with tab_behaviour:
                     "gross_bookings_per_uv": st.column_config.NumberColumn("GB / UV", format="$%.4f"),
                 }
             )
-            st.download_button("📥 Download CSV", beh_df.to_csv(index=False),
+            st.download_button("📥 Download CSV (by market)", beh_by_country.to_csv(index=False),
                                "user_behaviour_intl.csv", "text/csv", key="beh_dl")
+
+        with st.expander("📋 Data Table — by Market × Client Platform"):
+            display_plat_df = beh_df.sort_values(['country', 'client_platform'])
+            st.dataframe(
+                display_plat_df, use_container_width=True, hide_index=True,
+                column_config={
+                    "country": st.column_config.TextColumn("Market"),
+                    "client_platform": st.column_config.TextColumn("Client Platform"),
+                    "uv": st.column_config.NumberColumn("UV", format="%d"),
+                    "active_uv": st.column_config.NumberColumn("Active UV", format="%d"),
+                    "nob": st.column_config.NumberColumn("Bookings", format="%d"),
+                    "m1vfm_usd": st.column_config.NumberColumn("M1 VFM (USD)", format="$%.0f"),
+                    "gross_bookings_usd": st.column_config.NumberColumn("Gross Bookings (USD)", format="$%.0f"),
+                }
+            )
+            st.download_button("📥 Download CSV (by platform)", beh_df.to_csv(index=False),
+                               "user_behaviour_intl_platform.csv", "text/csv", key="beh_plat_dl")
 
 
 # =============================================================================
@@ -625,7 +672,7 @@ with tab_financial:
                 fig_trend = px.line(tdf, x='order_created_date', y=trend_col, color='client_platform',
                                     markers=False,
                                     color_discrete_map={'iphone': '#007AFF', 'android': '#34C759', 'ipad': '#FF9500'},
-                                    labels={'order_created_date': '', trend_col: trend_name, 'client_platform': 'Platform'})
+                                    labels={'order_created_date': '', trend_col: trend_name, 'client_platform': 'Client Platform'})
             else:
                 tdf = fin_df.groupby('order_created_date')[trend_col].sum().reset_index()
                 fig_trend = px.area(tdf, x='order_created_date', y=trend_col,
@@ -680,7 +727,7 @@ with tab_financial:
             fig_plat = px.bar(
                 plat_split, x='country_upper', y='pct', color='client_platform',
                 barmode='stack', title='Platform Mix by Market (%)',
-                labels={'country_upper': '', 'pct': 'Share (%)', 'client_platform': 'Platform'},
+                labels={'country_upper': '', 'pct': 'Share (%)', 'client_platform': 'Client Platform'},
                 category_orders={'country_upper': country_order_plat},
                 color_discrete_map={'iphone': '#007AFF', 'android': '#34C759', 'ipad': '#FF9500'}
             )
