@@ -270,6 +270,39 @@ def load_cohort_data():
     df['cohort_week'] = pd.to_datetime(df['cohort_week'])
     return df
 
+@st.cache_data(ttl=300)
+def load_yoy_data():
+    df = query_data('''
+    SELECT `iso_year`, `iso_week`, `iso_year_week`, `iso_week_start`,
+           `country_code`, `groupon_version`, `operating_system`,
+           SUM(`m1_vfm`) AS m1_vfm,
+           SUM(`gross_bookings`) AS gross_bookings,
+           SUM(`orders`) AS orders,
+           SUM(`nob`) AS nob,
+           SUM(`activations`) AS activations,
+           SUM(`purchasers`) AS purchasers
+    FROM `kbc-grpn-40-0cd2`.`out_c_intl_app_yoy_trends`.`weekly_yoy_INTL_app`
+    GROUP BY 1, 2, 3, 4, 5, 6, 7
+    ''')
+    for col in ['iso_year','iso_week','m1_vfm','gross_bookings','orders','nob','activations','purchasers']:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+    df['iso_week_start'] = pd.to_datetime(df['iso_week_start'])
+    return df
+
+@st.cache_data(ttl=300)
+def load_yoy_uv_data():
+    df = query_data('''
+    SELECT `iso_year`, `iso_week`, `iso_year_week`, `iso_week_start`,
+           `country_code`, `operating_system`, `weekly_distinct_bcookies`
+    FROM `kbc-grpn-40-0cd2`.`out_c_intl_app_yoy_trends`.`weekly_uv_INTL_app`
+    ''')
+    for col in ['iso_year','iso_week','weekly_distinct_bcookies']:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+    df['iso_week_start'] = pd.to_datetime(df['iso_week_start'])
+    return df
+
 
 # =============================================================================
 # LOAD DATA
@@ -288,6 +321,16 @@ try:
     coh_df_raw = load_cohort_data()
 except Exception:
     coh_df_raw = pd.DataFrame()
+
+try:
+    yoy_df_raw = load_yoy_data()
+except Exception:
+    yoy_df_raw = pd.DataFrame()
+
+try:
+    yoy_uv_df_raw = load_yoy_uv_data()
+except Exception:
+    yoy_uv_df_raw = pd.DataFrame()
 
 
 # =============================================================================
@@ -333,33 +376,6 @@ with st.sidebar:
     else:
         sel_platforms = []
 
-    st.markdown("---")
-    st.markdown('<p class="section-label">Financial Tab</p>', unsafe_allow_html=True)
-
-    if not fin_df_raw.empty:
-        min_d = fin_df_raw['order_created_date'].min().date()
-        max_d = fin_df_raw['order_created_date'].max().date()
-        date_range = st.date_input(
-            "Date range", value=(min_d, max_d), min_value=min_d, max_value=max_d, key="fin_dates"
-        )
-        start_d, end_d = (date_range[0], date_range[1]) if len(date_range) == 2 else (min_d, max_d)
-    else:
-        start_d, end_d = None, None
-
-    st.markdown("---")
-    st.markdown('<p class="section-label">Cohort Tab</p>', unsafe_allow_html=True)
-
-    if not coh_df_raw.empty:
-        available_weeks = sorted(coh_df_raw['cohort_week'].dt.date.unique())
-        default_weeks = available_weeks[-12:] if len(available_weeks) > 12 else available_weeks
-        sel_weeks = st.multiselect(
-            "Cohort weeks", options=available_weeks, default=default_weeks, key="coh_weeks"
-        )
-        if not sel_weeks:
-            sel_weeks = available_weeks
-    else:
-        sel_weeks = []
-
     if KAI_AVAILABLE and STORAGE_API_TOKEN:
         st.markdown("---")
         st.markdown('<p class="section-label">Kai AI</p>', unsafe_allow_html=True)
@@ -371,7 +387,8 @@ with st.sidebar:
 
 
 # =============================================================================
-# APPLY FILTERS
+# APPLY GLOBAL FILTERS
+# (Tab-specific filters are applied inline within each tab body — rule #4)
 # =============================================================================
 if not beh_df_raw.empty and sel_platforms:
     beh_df = beh_df_raw[
@@ -381,37 +398,140 @@ if not beh_df_raw.empty and sel_platforms:
 else:
     beh_df = beh_df_raw[beh_df_raw['country'].isin(selected_countries)].copy() if not beh_df_raw.empty else beh_df_raw
 
-if not fin_df_raw.empty and start_d and end_d:
-    fin_df = fin_df_raw[
-        fin_df_raw['country_upper'].isin(selected_countries) &
-        (fin_df_raw['order_created_date'].dt.date >= start_d) &
-        (fin_df_raw['order_created_date'].dt.date <= end_d) &
-        fin_df_raw['client_platform'].isin(sel_platforms)
-    ].copy()
-else:
-    fin_df = fin_df_raw.copy()
-
-if not coh_df_raw.empty:
-    coh_df = coh_df_raw[
-        coh_df_raw['country'].isin(selected_countries) &
-        coh_df_raw['cohort_week'].dt.date.isin(sel_weeks)
-    ].copy()
-else:
-    coh_df = coh_df_raw.copy()
-
 
 # =============================================================================
 # PAGE HEADER
 # =============================================================================
 st.markdown("# 🌍 INTL APP Markets by countries")
-st.markdown("Use the sidebar to filter by market, date range, or client platform.")
+st.markdown("Sidebar filters apply across all tabs. Tab-specific filters live inline next to the relevant table/chart.")
 
-tab_behaviour, tab_financial, tab_cohort, tab_kai = st.tabs([
+tab_yoy, tab_behaviour, tab_financial, tab_cohort, tab_kai = st.tabs([
+    "📈 YoY Trends",
     "🧠 User Behaviour",
     "💰 Financial Performance",
     "🔄 Cohort Analysis",
     "🤖 Ask Kai"
 ])
+
+
+# =============================================================================
+# TAB 0 — YoY TRENDS (new)
+# =============================================================================
+with tab_yoy:
+    st.caption("Weekly Year-over-Year and Week-over-Week trends for the INTL App, mirroring Radomir's NA YoY sheet. Currently scoped to **iOS** only; backfill in progress so prior-year YoY% may be incomplete.")
+
+    if yoy_df_raw.empty or yoy_uv_df_raw.empty:
+        st.warning("YoY tables not yet available. The data load may still be in progress. Check `weekly_yoy_INTL_app` and `weekly_uv_INTL_app`.")
+    else:
+        # --- Inline filters ---
+        f1, f2, f3 = st.columns([1, 1, 2])
+        with f1:
+            countries_yoy = sorted(yoy_df_raw['country_code'].dropna().unique())
+            default_country = 'GB' if 'GB' in countries_yoy else (countries_yoy[0] if countries_yoy else None)
+            sel_country = st.selectbox(
+                "Country", countries_yoy,
+                index=countries_yoy.index(default_country) if default_country else 0,
+                key="yoy_country"
+            )
+        with f2:
+            version_opts = ['All', 'legacy', 'mbnxt']
+            sel_version = st.selectbox(
+                "Groupon Version", version_opts, index=0, key="yoy_version",
+                help="Side-by-side MBNXT-vs-Legacy isn't measurable on INTL (no local bucketing). Pick a single version for a within-cohort YoY read."
+            )
+        with f3:
+            os_opts = sorted(yoy_df_raw['operating_system'].dropna().unique())
+            sel_os = st.selectbox("OS", os_opts,
+                                  index=os_opts.index('iOS') if 'iOS' in os_opts else 0,
+                                  key="yoy_os")
+
+        # --- Filter + aggregate to weekly grain ---
+        yoy_f = yoy_df_raw[
+            (yoy_df_raw['country_code'] == sel_country) &
+            (yoy_df_raw['operating_system'] == sel_os)
+        ]
+        uv_f = yoy_uv_df_raw[
+            (yoy_uv_df_raw['country_code'] == sel_country) &
+            (yoy_uv_df_raw['operating_system'] == sel_os)
+        ]
+        if sel_version != 'All':
+            yoy_f = yoy_f[yoy_f['groupon_version'] == sel_version]
+
+        if yoy_f.empty:
+            st.warning(f"No data for {sel_country} / {sel_version} / {sel_os}.")
+        else:
+            # Aggregate daily-grain → weekly (sum over groupon_version if "All", sum over days within a week)
+            weekly_yoy = yoy_f.groupby(['iso_year', 'iso_week', 'iso_year_week', 'iso_week_start'], as_index=False).agg(
+                m1_vfm=('m1_vfm', 'sum'),
+                orders=('orders', 'sum'),
+                gross_bookings=('gross_bookings', 'sum'),
+                nob=('nob', 'sum'),
+            )
+            # UV table is already weekly grain
+            weekly_uv = uv_f.groupby(['iso_year', 'iso_week', 'iso_year_week', 'iso_week_start'], as_index=False).agg(
+                uvs=('weekly_distinct_bcookies', 'sum')
+            )
+            weekly = weekly_yoy.merge(weekly_uv, on=['iso_year', 'iso_week', 'iso_year_week', 'iso_week_start'], how='outer')
+            weekly['m1_vfm_per_uv'] = weekly.apply(
+                lambda r: (r['m1_vfm'] / r['uvs']) if r.get('uvs', 0) and r['uvs'] > 0 else None,
+                axis=1
+            )
+            weekly = weekly.sort_values(['iso_year', 'iso_week']).reset_index(drop=True)
+
+            # --- Render a YoY table per metric ---
+            def render_yoy_table(metric_col, metric_label, fmt_fn):
+                pivot = weekly.pivot_table(index='iso_week', columns='iso_year', values=metric_col, aggfunc='sum')
+                pivot = pivot.sort_index()  # ISO weeks 1..53
+                pivot = pivot.reindex(sorted(pivot.columns), axis=1)  # years left→right oldest→newest
+                years = list(pivot.columns)
+                # Year-over-year columns
+                for i in range(1, len(years)):
+                    pivot[f"{years[i]} YoY %"] = (pivot[years[i]] / pivot[years[i-1]] - 1) * 100
+                # WoW % for the latest year
+                if years:
+                    latest = years[-1]
+                    pivot['WoW %'] = pivot[latest].pct_change() * 100
+                # Latest week first
+                pivot = pivot.sort_index(ascending=False)
+
+                st.markdown(f"### {metric_label}")
+                show = pivot.reset_index().rename(columns={'iso_week': 'ISO Week'})
+
+                col_cfg = {"ISO Week": st.column_config.NumberColumn("ISO Week", format="%d")}
+                for y in years:
+                    col_cfg[y] = st.column_config.NumberColumn(str(y), format=fmt_fn)
+                for col in pivot.columns:
+                    if isinstance(col, str) and "%" in col:
+                        col_cfg[col] = st.column_config.NumberColumn(col, format="%.1f%%")
+                st.dataframe(show, use_container_width=True, hide_index=True, column_config=col_cfg)
+
+            render_yoy_table('m1_vfm', '💰 M1 VFM', "$%.0f")
+            render_yoy_table('m1_vfm_per_uv', '💵 M1 VFM per UV', "$%.2f")
+            render_yoy_table('uvs', '👥 Distinct UVs', "%.0f")
+
+            # --- Optional line chart per metric ---
+            st.markdown("---")
+            st.markdown("### Trend chart")
+            metric_choice = st.radio(
+                "Metric", ["M1 VFM", "M1 VFM per UV", "Distinct UVs"], horizontal=True, key="yoy_metric_chart"
+            )
+            metric_map = {"M1 VFM": "m1_vfm", "M1 VFM per UV": "m1_vfm_per_uv", "Distinct UVs": "uvs"}
+            mc = metric_map[metric_choice]
+            chart_df = weekly[['iso_year', 'iso_week', mc]].dropna(subset=[mc]).copy()
+            chart_df['iso_year_str'] = chart_df['iso_year'].astype(int).astype(str)
+            fig = px.line(chart_df, x='iso_week', y=mc, color='iso_year_str',
+                          markers=True,
+                          labels={'iso_week': 'ISO Week', mc: metric_choice, 'iso_year_str': 'Year'},
+                          title=f"{metric_choice} — {sel_country} / {sel_version} / {sel_os}")
+            fig.update_layout(height=380, margin=dict(l=0, r=0, t=40, b=10))
+            st.plotly_chart(fig, use_container_width=True)
+
+            # --- Download ---
+            st.markdown("---")
+            with st.expander("📋 Raw weekly data"):
+                st.dataframe(weekly, use_container_width=True, hide_index=True)
+                st.download_button("📥 Download CSV", weekly.to_csv(index=False),
+                                   f"yoy_{sel_country}_{sel_version}_{sel_os}.csv", "text/csv", key="yoy_dl")
 
 
 # =============================================================================
@@ -604,8 +724,31 @@ with tab_behaviour:
 # TAB 2 — FINANCIAL PERFORMANCE
 # =============================================================================
 with tab_financial:
+    # --- Inline date filter (tab-specific) ---
+    if fin_df_raw.empty:
+        st.warning("No financial data available.")
+        fin_df = fin_df_raw
+    else:
+        min_d = fin_df_raw['order_created_date'].min().date()
+        max_d = fin_df_raw['order_created_date'].max().date()
+        default_start = max(min_d, pd.Timestamp(max_d.year, 1, 1).date())
+        f_col1, _ = st.columns([2, 3])
+        with f_col1:
+            date_range = st.date_input(
+                "Date range", value=(default_start, max_d),
+                min_value=min_d, max_value=max_d, key="fin_dates_inline",
+                help="Defaults to current calendar year. Drag earlier to see prior years."
+            )
+        start_d, end_d = (date_range[0], date_range[1]) if len(date_range) == 2 else (default_start, max_d)
+        fin_df = fin_df_raw[
+            fin_df_raw['country_upper'].isin(selected_countries) &
+            (fin_df_raw['order_created_date'].dt.date >= start_d) &
+            (fin_df_raw['order_created_date'].dt.date <= end_d) &
+            fin_df_raw['client_platform'].isin(sel_platforms)
+        ].copy()
+
     if fin_df.empty:
-        st.warning("No financial data available for the selected filters.")
+        st.info("No data for the selected filters.")
     else:
         total_orders  = fin_df['orders'].sum()
         total_gb_fin  = fin_df['gross_bookings'].sum()
@@ -833,8 +976,28 @@ with tab_financial:
 # TAB 3 — COHORT ANALYSIS
 # =============================================================================
 with tab_cohort:
+    # --- Inline cohort-week filter (tab-specific) ---
+    if coh_df_raw.empty:
+        st.warning("No cohort data available.")
+        coh_df = coh_df_raw
+    else:
+        available_weeks = sorted(coh_df_raw['cohort_week'].dt.date.unique())
+        default_weeks = available_weeks[-12:] if len(available_weeks) > 12 else available_weeks
+        c_col1, _ = st.columns([2, 3])
+        with c_col1:
+            sel_weeks = st.multiselect(
+                "Cohort weeks", options=available_weeks, default=default_weeks, key="coh_weeks_inline",
+                help="Each row of a cohort is users who first arrived in that week. CVR columns show what % converted in days 1-7, 7-14, 14-28 after their first visit."
+            )
+            if not sel_weeks:
+                sel_weeks = available_weeks
+        coh_df = coh_df_raw[
+            coh_df_raw['country'].isin(selected_countries) &
+            coh_df_raw['cohort_week'].dt.date.isin(sel_weeks)
+        ].copy()
+
     if coh_df.empty:
-        st.warning("No cohort data available for the selected filters.")
+        st.info("No data for the selected filters.")
     else:
         total_new_uvs  = coh_df['new_uvs'].sum()
         avg_cvr_d1_7   = coh_df['cvr_d1_7_pct'].mean()
