@@ -512,16 +512,16 @@ with tab_cohort:
                     index=countries_coh.index(default_c), key="coh_country"
                 )
             with f2:
-                sel_metric_labels = st.multiselect(
-                    "Metrics", list(metric_options.keys()),
-                    default=['Orders', 'CVR (%)', 'M1 VFM (USD)', 'M1 VFM / UV (USD)'],
-                    key="coh_metrics"
+                sel_metric_label = st.selectbox(
+                    "Metric", list(metric_options.keys()),
+                    index=list(metric_options.keys()).index('Orders'),
+                    key="coh_metric"
                 )
 
             cdf = coh_df[coh_df['country'] == sel_country_coh].copy().sort_values('cohort_week')
 
-            if cdf.empty or not sel_metric_labels:
-                st.info("Pick at least one metric. No data for the selected country if cohort is empty.")
+            if cdf.empty:
+                st.info("No cohort data for the selected country.")
             else:
                 window_labels = {
                     'day_01': 'Day 1', 'day_01_07': 'Day 1–7', 'day_01_14': 'Day 1–14',
@@ -552,37 +552,36 @@ with tab_cohort:
                         return (row[f'{win}_m1_vfm'] / o) if o > 0 else None
                     return row[f'{win}_{mkey}']
 
-                # --- One formatted table per selected metric (rows = cohort week, cols = windows) ---
-                for metric_label in sel_metric_labels:
-                    mkey = metric_options[metric_label]
-                    rows = []
-                    for _, row in cdf.iterrows():
-                        r = {'Cohort Week': row['cohort_week'].strftime('%Y-%m-%d')}
-                        if mkey == 'UV':
-                            r['New UVs'] = row['UV']
-                        else:
-                            for w in COHORT_WINDOWS:
-                                r[window_labels[w]] = compute_metric(row, mkey, w)
-                        rows.append(r)
-                    tbl = pd.DataFrame(rows)
+                # --- Single formatted table for the selected metric (rows = cohort week, cols = windows) ---
+                mkey = metric_options[sel_metric_label]
+                rows = []
+                for _, row in cdf.iterrows():
+                    r = {'Cohort Week': row['cohort_week'].strftime('%Y-%m-%d')}
+                    if mkey == 'UV':
+                        r['New UVs'] = row['UV']
+                    else:
+                        for w in COHORT_WINDOWS:
+                            r[window_labels[w]] = compute_metric(row, mkey, w)
+                    rows.append(r)
+                tbl = pd.DataFrame(rows)
 
-                    st.markdown(f"#### {metric_label}")
-                    value_cols = [c for c in tbl.columns if c != 'Cohort Week']
-                    fmt_str = fmt_by_metric.get(mkey, '{:,.2f}')
-                    fmt_map = {c: (lambda v, f=fmt_str: '' if pd.isna(v) else f.format(v)) for c in value_cols}
-                    try:
-                        styled = (tbl.style
-                                  .format(fmt_map)
-                                  .background_gradient(cmap='RdYlGn', subset=value_cols, axis=None))
-                        st.dataframe(styled, use_container_width=True, hide_index=True)
-                    except Exception:
-                        st.dataframe(tbl, use_container_width=True, hide_index=True)
+                st.markdown(f"#### {sel_country_coh} — {sel_metric_label}")
+                value_cols = [c for c in tbl.columns if c != 'Cohort Week']
+                fmt_str = fmt_by_metric.get(mkey, '{:,.2f}')
+                fmt_map = {c: (lambda v, f=fmt_str: '' if pd.isna(v) else f.format(v)) for c in value_cols}
+                try:
+                    styled = (tbl.style
+                              .format(fmt_map)
+                              .background_gradient(cmap='RdYlGn', subset=value_cols, axis=None))
+                    st.dataframe(styled, use_container_width=True, hide_index=True)
+                except Exception:
+                    st.dataframe(tbl, use_container_width=True, hide_index=True)
 
-                # --- Line chart of primary metric across cohort weeks, one line per window ---
-                primary_label = sel_metric_labels[0]
-                pkey = metric_options[primary_label]
+                # --- Line chart of the same metric across cohort weeks, one line per window ---
+                pkey = mkey
+                primary_label = sel_metric_label
                 st.markdown("---")
-                st.markdown(f"### {primary_label} — trend across cohort weeks")
+                st.markdown(f"### Trend across cohort weeks")
                 chart_rows = []
                 for _, row in cdf.iterrows():
                     for w in COHORT_WINDOWS:
