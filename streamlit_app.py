@@ -491,19 +491,33 @@ with tab_yoy:
                 if years:
                     latest = years[-1]
                     pivot['WoW %'] = pivot[latest].pct_change() * 100
-                # Latest week first
-                pivot = pivot.sort_index(ascending=False)
+                # Oldest week first
+                pivot = pivot.sort_index(ascending=True)
 
                 st.markdown(f"### {metric_label}")
                 show = pivot.reset_index().rename(columns={'iso_week': 'ISO Week'})
 
-                col_cfg = {"ISO Week": st.column_config.NumberColumn("ISO Week", format="%d")}
-                for y in years:
-                    col_cfg[y] = st.column_config.NumberColumn(str(y), format=fmt_fn)
-                for col in pivot.columns:
-                    if isinstance(col, str) and "%" in col:
-                        col_cfg[col] = st.column_config.NumberColumn(col, format="%.1f%%")
-                st.dataframe(show, use_container_width=True, hide_index=True, column_config=col_cfg)
+                pct_cols = [c for c in show.columns if isinstance(c, str) and "%" in c]
+                year_cols = [c for c in show.columns if c in years]
+
+                def _pct_bg(v):
+                    if pd.isna(v):
+                        return ''
+                    if v < 0:
+                        return 'background-color: #fcd6d6'
+                    if v > 0:
+                        return 'background-color: #d6f5d6'
+                    return ''
+
+                fmt_map = {"ISO Week": "{:d}"}
+                fmt_map.update({c: fmt_fn.replace('%', '{:').replace('d', 'd}').replace('f', 'f}') for c in year_cols})
+                for c in year_cols:
+                    fmt_map[c] = lambda v, ff=fmt_fn: '' if pd.isna(v) else (ff % v)
+                for c in pct_cols:
+                    fmt_map[c] = lambda v: '' if pd.isna(v) else f"{v:+.1f}%"
+
+                styled = show.style.format(fmt_map).map(_pct_bg, subset=pct_cols)
+                st.dataframe(styled, use_container_width=True, hide_index=True)
 
             render_yoy_table('m1_vfm', '💰 M1 VFM', "$%.0f")
             render_yoy_table('m1_vfm_per_uv', '💵 M1 VFM per UV', "$%.2f")
