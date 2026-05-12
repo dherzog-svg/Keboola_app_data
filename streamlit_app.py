@@ -441,24 +441,27 @@ with tab_yoy:
             )
         with f3:
             os_opts = sorted(yoy_df_raw['operating_system'].dropna().unique())
-            sel_os = st.selectbox("OS", os_opts,
-                                  index=os_opts.index('iOS') if 'iOS' in os_opts else 0,
-                                  key="yoy_os")
+            default_os = ['iOS'] if 'iOS' in os_opts else os_opts[:1]
+            sel_os = st.multiselect("OS", os_opts, default=default_os, key="yoy_os")
+
+        if not sel_os:
+            st.warning("Pick at least one OS.")
+            st.stop()
 
         # --- Filter + aggregate to weekly grain ---
         yoy_f = yoy_df_raw[
             (yoy_df_raw['country_code'] == sel_country) &
-            (yoy_df_raw['operating_system'] == sel_os)
+            (yoy_df_raw['operating_system'].isin(sel_os))
         ]
         uv_f = yoy_uv_df_raw[
             (yoy_uv_df_raw['country_code'] == sel_country) &
-            (yoy_uv_df_raw['operating_system'] == sel_os)
+            (yoy_uv_df_raw['operating_system'].isin(sel_os))
         ]
         if sel_version != 'All':
             yoy_f = yoy_f[yoy_f['groupon_version'] == sel_version]
 
         if yoy_f.empty:
-            st.warning(f"No data for {sel_country} / {sel_version} / {sel_os}.")
+            st.warning(f"No data for {sel_country} / {sel_version} / {'+'.join(sel_os)}.")
         else:
             # Aggregate daily-grain → weekly (sum over groupon_version if "All", sum over days within a week)
             weekly_yoy = yoy_f.groupby(['iso_year', 'iso_week', 'iso_year_week', 'iso_week_start'], as_index=False).agg(
@@ -500,17 +503,21 @@ with tab_yoy:
                 pct_cols = [c for c in show.columns if isinstance(c, str) and "%" in c]
                 year_cols = [c for c in show.columns if c in years]
 
-                def _pct_bg(v):
+                def _pct_bg(v, cap=50.0):
                     if pd.isna(v):
                         return ''
-                    if v < 0:
-                        return 'background-color: #fcd6d6'
-                    if v > 0:
-                        return 'background-color: #d6f5d6'
-                    return ''
+                    intensity = min(abs(v), cap) / cap
+                    if v >= 0:
+                        r = int(255 - intensity * 127)
+                        g = int(255 - intensity * 56)
+                        b = int(255 - intensity * 127)
+                    else:
+                        r = int(255 - intensity * 23)
+                        g = int(255 - intensity * 127)
+                        b = int(255 - intensity * 127)
+                    return f'background-color: rgb({r},{g},{b})'
 
                 fmt_map = {"ISO Week": "{:d}"}
-                fmt_map.update({c: fmt_fn.replace('%', '{:').replace('d', 'd}').replace('f', 'f}') for c in year_cols})
                 for c in year_cols:
                     fmt_map[c] = lambda v, ff=fmt_fn: '' if pd.isna(v) else (ff % v)
                 for c in pct_cols:
@@ -536,7 +543,7 @@ with tab_yoy:
             fig = px.line(chart_df, x='iso_week', y=mc, color='iso_year_str',
                           markers=True,
                           labels={'iso_week': 'ISO Week', mc: metric_choice, 'iso_year_str': 'Year'},
-                          title=f"{metric_choice} — {sel_country} / {sel_version} / {sel_os}")
+                          title=f"{metric_choice} — {sel_country} / {sel_version} / {'+'.join(sel_os)}")
             fig.update_layout(height=380, margin=dict(l=0, r=0, t=40, b=10))
             st.plotly_chart(fig, use_container_width=True)
 
@@ -545,7 +552,7 @@ with tab_yoy:
             with st.expander("📋 Raw weekly data"):
                 st.dataframe(weekly, use_container_width=True, hide_index=True)
                 st.download_button("📥 Download CSV", weekly.to_csv(index=False),
-                                   f"yoy_{sel_country}_{sel_version}_{sel_os}.csv", "text/csv", key="yoy_dl")
+                                   f"yoy_{sel_country}_{sel_version}_{'-'.join(sel_os)}.csv", "text/csv", key="yoy_dl")
 
 
 # =============================================================================
