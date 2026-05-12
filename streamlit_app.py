@@ -218,53 +218,16 @@ st.markdown("""
 # =============================================================================
 # DATA LOADING
 # =============================================================================
-@st.cache_data(ttl=300)
-def load_behaviour_data():
-    df = query_data('''
-    SELECT `country`, `client_platform`, `uv`, `active_uv`, `active_uv_rate_pct`, `nob`,
-           `m1vfm_usd`, `gross_bookings_usd`, `cvr`,
-           `m1vfm_per_active_uv`, `gross_bookings_per_active_uv`,
-           `m1vfm_per_uv`, `gross_bookings_per_uv`
-    FROM `kbc-grpn-40-0cd2`.`out_c_testing_data_apps`.`user_behaviour_INTL`
-    ''')
-    for col in ['uv','active_uv','active_uv_rate_pct','nob','m1vfm_usd',
-                'gross_bookings_usd','cvr','m1vfm_per_active_uv',
-                'gross_bookings_per_active_uv','m1vfm_per_uv','gross_bookings_per_uv']:
-        if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
-    return df
-
-@st.cache_data(ttl=300)
-def load_financial_data():
-    df = query_data('''
-    SELECT `country_upper`, `order_created_date`, `client_platform`,
-           `orders`, `activations`, `reactivations`, `refunded_orders`, `cancelled_orders`,
-           `deals_all`, `deals_with_od_applied`, `deals_with_ils_applied`,
-           `gross_bookings`, `nob`, `gb_deals_with_od_applied`, `gb_deals_with_ils_applied`,
-           `ils_applied`, `od_applied`, `m1_vfm`, `m1_vfm_deals_with_od_applied`, `m2_estimate`
-    FROM `kbc-grpn-40-0cd2`.`out_c_testing_data_apps`.`financial_INTL_app`
-    ''')
-    for col in ['orders','activations','reactivations','refunded_orders','cancelled_orders',
-                'deals_all','deals_with_od_applied','deals_with_ils_applied',
-                'gross_bookings','nob','gb_deals_with_od_applied','gb_deals_with_ils_applied',
-                'ils_applied','od_applied','m1_vfm','m1_vfm_deals_with_od_applied','m2_estimate']:
-        if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
-    df['order_created_date'] = pd.to_datetime(df['order_created_date'])
-    return df
+COHORT_WINDOWS = ['day_01', 'day_01_07', 'day_01_14', 'day_01_21', 'day_01_28']
+COHORT_BASE_METRICS = ['orders', 'purchasers', 'nob', 'gross_bookings', 'm1_vfm', 'm2_estimate',
+                       'ils_applied', 'od_applied', 'deals_all', 'deals_with_od_applied',
+                       'deals_with_ils_applied', 'gb_deals_with_od_applied', 'gb_deals_with_ils_applied']
 
 @st.cache_data(ttl=300)
 def load_cohort_data():
-    df = query_data('''
-    SELECT `country`, `cohort_week`, `new_uvs`,
-           `buyers_d1_7`, `cvr_d1_7_pct`, `m1vfm_per_uv_d1_7_usd`,
-           `buyers_d7_14`, `cvr_d7_14_pct`, `m1vfm_per_uv_d7_14_usd`,
-           `buyers_d14_28`, `cvr_d14_28_pct`, `m1vfm_per_uv_d14_28_usd`
-    FROM `kbc-grpn-40-0cd2`.`out_c_testing_data_apps`.`cohort_INTL_app`
-    ''')
-    for col in ['new_uvs','buyers_d1_7','cvr_d1_7_pct','m1vfm_per_uv_d1_7_usd',
-                'buyers_d7_14','cvr_d7_14_pct','m1vfm_per_uv_d7_14_usd',
-                'buyers_d14_28','cvr_d14_28_pct','m1vfm_per_uv_d14_28_usd']:
+    df = query_data('SELECT * FROM `kbc-grpn-40-0cd2`.`out_c_testing_data_apps`.`cohort_INTL_app`')
+    numeric_cols = ['UV'] + [f'{w}_{m}' for w in COHORT_WINDOWS for m in COHORT_BASE_METRICS]
+    for col in numeric_cols:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
     df['cohort_week'] = pd.to_datetime(df['cohort_week'])
@@ -308,16 +271,6 @@ def load_yoy_uv_data():
 # LOAD DATA
 # =============================================================================
 try:
-    beh_df_raw = load_behaviour_data()
-except Exception:
-    beh_df_raw = pd.DataFrame()
-
-try:
-    fin_df_raw = load_financial_data()
-except Exception:
-    fin_df_raw = pd.DataFrame()
-
-try:
     coh_df_raw = load_cohort_data()
 except Exception:
     coh_df_raw = pd.DataFrame()
@@ -340,14 +293,12 @@ with st.sidebar:
     st.markdown("## 🌍 INTL Markets Analytics")
     st.markdown("---")
 
-    # Country filter — shared across all tabs
+    # Country filter — shared across Cohort + YoY tabs
     all_countries = sorted(set(
-        list(beh_df_raw['country'].dropna().unique() if not beh_df_raw.empty else []) +
-        list(fin_df_raw['country_upper'].dropna().unique() if not fin_df_raw.empty else []) +
-        list(coh_df_raw['country'].dropna().unique() if not coh_df_raw.empty else [])
+        list(coh_df_raw['country'].dropna().unique() if not coh_df_raw.empty else []) +
+        list(yoy_df_raw['country_code'].dropna().unique() if not yoy_df_raw.empty else [])
     ))
-    # Default to countries that appear in financial data (active Groupon markets)
-    core_countries = sorted(fin_df_raw['country_upper'].dropna().unique()) if not fin_df_raw.empty else all_countries
+    core_countries = all_countries
     st.markdown('<p class="section-label">Markets</p>', unsafe_allow_html=True)
     select_all_mkts = st.checkbox("Select all", value=True, key="select_all_mkts")
     if select_all_mkts:
@@ -360,22 +311,6 @@ with st.sidebar:
         if not selected_countries:
             selected_countries = core_countries
 
-    # Client platform filter — shared across User Behaviour and Financial tabs
-    st.markdown("---")
-    st.markdown('<p class="section-label">Client Platform</p>', unsafe_allow_html=True)
-    all_platforms = sorted(set(
-        list(beh_df_raw['client_platform'].dropna().unique() if not beh_df_raw.empty else []) +
-        list(fin_df_raw['client_platform'].dropna().unique() if not fin_df_raw.empty else [])
-    ))
-    if all_platforms:
-        sel_platforms = st.multiselect(
-            "Client Platform", options=all_platforms, default=all_platforms, key="global_platforms"
-        )
-        if not sel_platforms:
-            sel_platforms = all_platforms
-    else:
-        sel_platforms = []
-
     if KAI_AVAILABLE and STORAGE_API_TOKEN:
         st.markdown("---")
         st.markdown('<p class="section-label">Kai AI</p>', unsafe_allow_html=True)
@@ -387,35 +322,20 @@ with st.sidebar:
 
 
 # =============================================================================
-# APPLY GLOBAL FILTERS
-# (Tab-specific filters are applied inline within each tab body — rule #4)
-# =============================================================================
-if not beh_df_raw.empty and sel_platforms:
-    beh_df = beh_df_raw[
-        beh_df_raw['country'].isin(selected_countries) &
-        beh_df_raw['client_platform'].isin(sel_platforms)
-    ].copy()
-else:
-    beh_df = beh_df_raw[beh_df_raw['country'].isin(selected_countries)].copy() if not beh_df_raw.empty else beh_df_raw
-
-
-# =============================================================================
 # PAGE HEADER
 # =============================================================================
 st.markdown("# 🌍 INTL APP Markets by countries")
-st.markdown("Sidebar filters apply across all tabs. Tab-specific filters live inline next to the relevant table/chart.")
+st.markdown("Sidebar holds global Markets filter. Tab-specific filters live inline next to the relevant table/chart.")
 
-tab_yoy, tab_behaviour, tab_financial, tab_cohort, tab_kai = st.tabs([
+tab_yoy, tab_cohort, tab_kai = st.tabs([
     "📈 YoY Trends",
-    "🧠 User Behaviour",
-    "💰 Financial Performance",
     "🔄 Cohort Analysis",
     "🤖 Ask Kai"
 ])
 
 
 # =============================================================================
-# TAB 0 — YoY TRENDS (new)
+# TAB 0 — YoY TRENDS
 # =============================================================================
 with tab_yoy:
     st.caption("Weekly Year-over-Year and Week-over-Week trends for the INTL App, mirroring Radomir's NA YoY sheet. Currently scoped to **iOS** only; backfill in progress so prior-year YoY% may be incomplete.")
@@ -555,673 +475,154 @@ with tab_yoy:
                                    f"yoy_{sel_country}_{sel_version}_{'-'.join(sel_os)}.csv", "text/csv", key="yoy_dl")
 
 
-# =============================================================================
-# TAB 1 — USER BEHAVIOUR
-# =============================================================================
-with tab_behaviour:
-    st.caption("Rolling 30-day snapshot — not controlled by the sidebar date filter. Filtered by selected markets and client platform.")
-    if beh_df.empty:
-        st.warning("No user behaviour data available for the selected filters.")
-    else:
-        # Aggregate to country level (data is now country × client_platform)
-        beh_by_country = beh_df.groupby('country').agg(
-            uv=('uv', 'sum'),
-            active_uv=('active_uv', 'sum'),
-            nob=('nob', 'sum'),
-            m1vfm_usd=('m1vfm_usd', 'sum'),
-            gross_bookings_usd=('gross_bookings_usd', 'sum'),
-        ).reset_index()
-        beh_by_country['active_uv_rate_pct'] = (beh_by_country['active_uv'] / beh_by_country['uv'].replace(0, 1) * 100).round(1)
-        beh_by_country['cvr'] = (beh_by_country['nob'] / beh_by_country['active_uv'].replace(0, 1)).round(4)
-        beh_by_country['m1vfm_per_active_uv'] = (beh_by_country['m1vfm_usd'] / beh_by_country['active_uv'].replace(0, 1)).round(4)
-        beh_by_country['gross_bookings_per_active_uv'] = (beh_by_country['gross_bookings_usd'] / beh_by_country['active_uv'].replace(0, 1)).round(4)
-        beh_by_country['m1vfm_per_uv'] = (beh_by_country['m1vfm_usd'] / beh_by_country['uv'].replace(0, 1)).round(4)
-        beh_by_country['gross_bookings_per_uv'] = (beh_by_country['gross_bookings_usd'] / beh_by_country['uv'].replace(0, 1)).round(4)
-
-        # --- KPIs ---
-        total_uv      = beh_by_country['uv'].sum()
-        total_active  = beh_by_country['active_uv'].sum()
-        total_nob     = beh_by_country['nob'].sum()
-        total_m1vfm   = beh_by_country['m1vfm_usd'].sum()
-        total_gb      = beh_by_country['gross_bookings_usd'].sum()
-        overall_cvr       = total_nob / total_active if total_active > 0 else 0
-        overall_active_rt = total_active / total_uv * 100 if total_uv > 0 else 0
-        overall_m1_per_uv = total_m1vfm / total_uv if total_uv > 0 else 0
-
-        k1, k2, k3, k4 = st.columns(4)
-        k1.metric("Total Unique Visitors", f"{total_uv:,.0f}")
-        k2.metric("Active Visitors", f"{total_active:,.0f}", delta=f"{overall_active_rt:.1f}% active rate")
-        k3.metric("Total Bookings", f"{total_nob:,.0f}")
-        k4.metric("M1 VFM", f"${total_m1vfm:,.0f}")
-
-        k5, k6, k7, k8 = st.columns(4)
-        k5.metric("Gross Bookings", f"${total_gb:,.0f}")
-        k6.metric("Avg Conversion Rate", f"{overall_cvr:.2%}")
-        k7.metric("Avg M1 VFM per UV", f"${overall_m1_per_uv:.2f}")
-        k8.metric("Markets in View", beh_by_country['country'].nunique())
-
-        st.markdown("---")
-
-        # --- Market Leaderboard ---
-        hdr_col, sel_col = st.columns([2, 1])
-        with hdr_col:
-            st.markdown("### Market Leaderboard")
-            st.markdown('<p class="section-label">Ranked by M1 VFM — the primary profitability signal</p>', unsafe_allow_html=True)
-        with sel_col:
-            lb_metric_options = {
-                'M1 VFM (USD)': 'm1vfm_usd',
-                'Gross Bookings (USD)': 'gross_bookings_usd',
-                'Unique Visitors': 'uv',
-                'Active Visitors': 'active_uv',
-                'Bookings': 'nob',
-                'Conversion Rate': 'cvr',
-                'M1 VFM per Active UV': 'm1vfm_per_active_uv',
-                'M1 VFM per UV': 'm1vfm_per_uv',
-                'Active UV Rate (%)': 'active_uv_rate_pct',
-            }
-            lb_metric_name = st.selectbox("Rank by", list(lb_metric_options.keys()), index=0, key="beh_lb_metric")
-            lb_metric = lb_metric_options[lb_metric_name]
-
-        chart_df = beh_by_country[['country', lb_metric]].sort_values(lb_metric, ascending=False)
-        fig_lb = px.bar(
-            chart_df, x='country', y=lb_metric,
-            color=lb_metric, color_continuous_scale='Blues',
-            text=lb_metric,
-            labels={'country': '', lb_metric: lb_metric_name}
-        )
-        fmt_map = {
-            'm1vfm_usd': '$%{text:,.0f}',
-            'gross_bookings_usd': '$%{text:,.0f}',
-            'uv': '%{text:,.0f}',
-            'active_uv': '%{text:,.0f}',
-            'nob': '%{text:,.0f}',
-            'cvr': '%{text:.4f}',
-            'm1vfm_per_active_uv': '$%{text:.2f}',
-            'm1vfm_per_uv': '$%{text:.2f}',
-            'gross_bookings_per_active_uv': '$%{text:.2f}',
-            'gross_bookings_per_uv': '$%{text:.2f}',
-            'active_uv_rate_pct': '%{text:.1f}%',
-        }
-        fmt = fmt_map.get(lb_metric, '%{text:,.2f}')
-        fig_lb.update_traces(texttemplate=fmt, textposition='outside')
-        fig_lb.update_layout(height=420, coloraxis_showscale=False, margin=dict(l=0, r=80, t=20, b=20))
-        st.plotly_chart(fig_lb, use_container_width=True)
-
-        st.markdown("---")
-
-        # --- Efficiency Quadrant ---
-        st.markdown("### Efficiency Quadrant — CVR vs. M1 VFM per Active UV")
-        st.markdown(
-            '<div class="insight-box">Markets in the top-right quadrant are the most efficient — '
-            'high conversion <em>and</em> high revenue per engaged user. These deserve priority investment.</div>',
-            unsafe_allow_html=True
-        )
-
-        median_cvr = beh_by_country['cvr'].median()
-        median_vfm = beh_by_country['m1vfm_per_active_uv'].median()
-
-        fig_quad = px.scatter(
-            beh_by_country, x='cvr', y='m1vfm_per_active_uv',
-            size='uv', color='country',
-            hover_name='country',
-            hover_data={'uv': ':,.0f', 'active_uv': ':,.0f', 'nob': ':,.0f'},
-            labels={'cvr': 'Conversion Rate', 'm1vfm_per_active_uv': 'M1 VFM per Active UV (USD)'},
-            size_max=55
-        )
-        fig_quad.add_hline(y=median_vfm, line_dash="dot", line_color="gray", opacity=0.5,
-                           annotation_text="Median VFM/UV", annotation_position="right")
-        fig_quad.add_vline(x=median_cvr, line_dash="dot", line_color="gray", opacity=0.5,
-                           annotation_text="Median CVR", annotation_position="top")
-        fig_quad.update_layout(height=440, margin=dict(l=0, r=0, t=20, b=20))
-        st.plotly_chart(fig_quad, use_container_width=True)
-
-        st.markdown("---")
-
-        # --- Active UV Rate vs. Gross Bookings per UV ---
-        st.markdown("### Audience Quality — Active Rate vs. Revenue per Visitor")
-        st.markdown(
-            '<div class="insight-box">Active rate shows how many visitors engage. '
-            'Gross bookings per UV shows monetisation. A high active rate with low GB/UV signals a conversion bottleneck.</div>',
-            unsafe_allow_html=True
-        )
-
-        fig_aq = px.scatter(
-            beh_by_country, x='active_uv_rate_pct', y='gross_bookings_per_uv',
-            size='uv', color='country',
-            hover_name='country',
-            labels={
-                'active_uv_rate_pct': 'Active UV Rate (%)',
-                'gross_bookings_per_uv': 'Gross Bookings per UV (USD)'
-            },
-            size_max=55
-        )
-        fig_aq.update_layout(height=400, margin=dict(l=0, r=0, t=20, b=20))
-        st.plotly_chart(fig_aq, use_container_width=True)
-
-        st.markdown("---")
-
-        # --- Data Table ---
-        with st.expander("📋 Data Table — by Market"):
-            display_df = beh_by_country.sort_values('m1vfm_usd', ascending=False)
-            st.dataframe(
-                display_df, use_container_width=True, hide_index=True,
-                column_config={
-                    "country": st.column_config.TextColumn("Market"),
-                    "uv": st.column_config.NumberColumn("UV", format="%d"),
-                    "active_uv": st.column_config.NumberColumn("Active UV", format="%d"),
-                    "active_uv_rate_pct": st.column_config.NumberColumn("Active Rate %", format="%.2f"),
-                    "nob": st.column_config.NumberColumn("Bookings", format="%d"),
-                    "m1vfm_usd": st.column_config.NumberColumn("M1 VFM (USD)", format="$%.0f"),
-                    "gross_bookings_usd": st.column_config.NumberColumn("Gross Bookings (USD)", format="$%.0f"),
-                    "cvr": st.column_config.NumberColumn("CVR", format="%.4f"),
-                    "m1vfm_per_active_uv": st.column_config.NumberColumn("M1 VFM / Active UV", format="$%.2f"),
-                    "gross_bookings_per_active_uv": st.column_config.NumberColumn("GB / Active UV", format="$%.2f"),
-                    "m1vfm_per_uv": st.column_config.NumberColumn("M1 VFM / UV", format="$%.4f"),
-                    "gross_bookings_per_uv": st.column_config.NumberColumn("GB / UV", format="$%.4f"),
-                }
-            )
-            st.download_button("📥 Download CSV (by market)", beh_by_country.to_csv(index=False),
-                               "user_behaviour_intl.csv", "text/csv", key="beh_dl")
-
-        with st.expander("📋 Data Table — by Market × Client Platform"):
-            display_plat_df = beh_df.sort_values(['country', 'client_platform'])
-            st.dataframe(
-                display_plat_df, use_container_width=True, hide_index=True,
-                column_config={
-                    "country": st.column_config.TextColumn("Market"),
-                    "client_platform": st.column_config.TextColumn("Client Platform"),
-                    "uv": st.column_config.NumberColumn("UV", format="%d"),
-                    "active_uv": st.column_config.NumberColumn("Active UV", format="%d"),
-                    "nob": st.column_config.NumberColumn("Bookings", format="%d"),
-                    "m1vfm_usd": st.column_config.NumberColumn("M1 VFM (USD)", format="$%.0f"),
-                    "gross_bookings_usd": st.column_config.NumberColumn("Gross Bookings (USD)", format="$%.0f"),
-                }
-            )
-            st.download_button("📥 Download CSV (by platform)", beh_df.to_csv(index=False),
-                               "user_behaviour_intl_platform.csv", "text/csv", key="beh_plat_dl")
-
 
 # =============================================================================
-# TAB 2 — FINANCIAL PERFORMANCE
-# =============================================================================
-with tab_financial:
-    # --- Inline date filter (tab-specific) ---
-    if fin_df_raw.empty:
-        st.warning("No financial data available.")
-        fin_df = fin_df_raw
-    else:
-        min_d = fin_df_raw['order_created_date'].min().date()
-        max_d = fin_df_raw['order_created_date'].max().date()
-        default_start = max(min_d, pd.Timestamp(max_d.year, 1, 1).date())
-        f_col1, _ = st.columns([2, 3])
-        with f_col1:
-            date_range = st.date_input(
-                "Date range", value=(default_start, max_d),
-                min_value=min_d, max_value=max_d, key="fin_dates_inline",
-                help="Defaults to current calendar year. Drag earlier to see prior years."
-            )
-        start_d, end_d = (date_range[0], date_range[1]) if len(date_range) == 2 else (default_start, max_d)
-        fin_df = fin_df_raw[
-            fin_df_raw['country_upper'].isin(selected_countries) &
-            (fin_df_raw['order_created_date'].dt.date >= start_d) &
-            (fin_df_raw['order_created_date'].dt.date <= end_d) &
-            fin_df_raw['client_platform'].isin(sel_platforms)
-        ].copy()
-
-    if fin_df.empty:
-        st.info("No data for the selected filters.")
-    else:
-        total_orders  = fin_df['orders'].sum()
-        total_gb_fin  = fin_df['gross_bookings'].sum()
-        total_m1_fin  = fin_df['m1_vfm'].sum()
-        total_m2_fin  = fin_df['m2_estimate'].sum()
-        total_act     = fin_df['activations'].sum()
-        total_react   = fin_df['reactivations'].sum()
-        total_refund  = fin_df['refunded_orders'].sum()
-        total_od      = abs(fin_df['od_applied'].sum())
-        total_ils     = abs(fin_df['ils_applied'].sum())
-        total_disc    = total_od + total_ils
-
-        act_rate    = total_act / total_orders * 100 if total_orders > 0 else 0
-        react_rate  = total_react / total_orders * 100 if total_orders > 0 else 0
-        refund_rate = total_refund / total_orders * 100 if total_orders > 0 else 0
-        disc_rate   = total_disc / total_gb_fin * 100 if total_gb_fin > 0 else 0
-        m1_margin   = total_m1_fin / total_gb_fin * 100 if total_gb_fin > 0 else 0
-
-        # --- KPIs ---
-        k1, k2, k3, k4, k5 = st.columns(5)
-        k1.metric("Gross Bookings", f"${total_gb_fin:,.0f}")
-        k2.metric("M1 VFM", f"${total_m1_fin:,.0f}", delta=f"{m1_margin:.1f}% margin")
-        k3.metric("M2 Estimate", f"${total_m2_fin:,.0f}")
-        k4.metric("Total Orders", f"{total_orders:,.0f}")
-        k5.metric("Total Discounts", f"${total_disc:,.0f}", delta=f"{disc_rate:.1f}% of GB", delta_color="inverse")
-
-        k6, k7, k8, k9, k10 = st.columns(5)
-        k6.metric("New Activations", f"{total_act:,.0f}", delta=f"{act_rate:.1f}%")
-        k7.metric("Reactivations", f"{total_react:,.0f}", delta=f"{react_rate:.1f}%")
-        k8.metric("Refunded Orders", f"{total_refund:,.0f}", delta=f"{refund_rate:.1f}% rate", delta_color="inverse")
-        k9.metric("OD Discounts", f"${total_od:,.0f}")
-        k10.metric("ILS Discounts", f"${total_ils:,.0f}")
-
-        st.markdown("---")
-
-        # --- Revenue Trend (fragment to prevent tab jumping on interaction) ---
-        @st.fragment
-        def revenue_trend():
-            st.markdown("### Revenue Trend")
-            tc1, tc2, tc3 = st.columns([2, 1, 1])
-            with tc1:
-                trend_options = {
-                    'Gross Bookings (USD)': 'gross_bookings',
-                    'M1 VFM (USD)': 'm1_vfm',
-                    'M2 Estimate (USD)': 'm2_estimate',
-                    'Orders': 'orders',
-                    'Activations': 'activations',
-                    'Reactivations': 'reactivations',
-                }
-                trend_name = st.selectbox("Metric", list(trend_options.keys()), key="fin_trend_metric")
-                trend_col = trend_options[trend_name]
-            with tc2:
-                by_country = st.checkbox("By market", value=False, key="fin_by_country")
-            with tc3:
-                by_platform = st.checkbox("By platform", value=False, key="fin_by_platform")
-
-            if by_country:
-                tdf = fin_df.groupby(['order_created_date', 'country_upper'])[trend_col].sum().reset_index()
-                fig_trend = px.line(tdf, x='order_created_date', y=trend_col, color='country_upper',
-                                    markers=False,
-                                    labels={'order_created_date': '', trend_col: trend_name, 'country_upper': 'Market'})
-            elif by_platform:
-                tdf = fin_df.groupby(['order_created_date', 'client_platform'])[trend_col].sum().reset_index()
-                fig_trend = px.line(tdf, x='order_created_date', y=trend_col, color='client_platform',
-                                    markers=False,
-                                    color_discrete_map={'iphone': '#007AFF', 'android': '#34C759', 'ipad': '#FF9500'},
-                                    labels={'order_created_date': '', trend_col: trend_name, 'client_platform': 'Client Platform'})
-            else:
-                tdf = fin_df.groupby('order_created_date')[trend_col].sum().reset_index()
-                fig_trend = px.area(tdf, x='order_created_date', y=trend_col,
-                                    color_discrete_sequence=['#1f77b4'],
-                                    labels={'order_created_date': '', trend_col: trend_name})
-
-            fig_trend.update_layout(height=380, margin=dict(l=0, r=0, t=10, b=10))
-            st.plotly_chart(fig_trend, use_container_width=True)
-
-        revenue_trend()
-
-        st.markdown("---")
-
-        # --- Market Performance + Platform Mix ---
-        st.markdown("### Market & Platform Breakdown")
-        col_a, col_b = st.columns(2)
-
-        with col_a:
-            mkt_sum = fin_df.groupby('country_upper').agg(
-                gross_bookings=('gross_bookings', 'sum'),
-                m1_vfm=('m1_vfm', 'sum'),
-                orders=('orders', 'sum')
-            ).reset_index().sort_values('gross_bookings', ascending=True)
-            mkt_sum['m1_margin_pct'] = mkt_sum['m1_vfm'] / mkt_sum['gross_bookings'].replace(0, 1) * 100
-
-            fig_mkt = go.Figure()
-            fig_mkt.add_trace(go.Bar(
-                y=mkt_sum['country_upper'], x=mkt_sum['gross_bookings'],
-                name='Gross Bookings', orientation='h', marker_color='#93c5fd',
-                text=mkt_sum['gross_bookings'].apply(lambda v: f'${v:,.0f}'),
-                textposition='outside'
-            ))
-            fig_mkt.add_trace(go.Bar(
-                y=mkt_sum['country_upper'], x=mkt_sum['m1_vfm'],
-                name='M1 VFM', orientation='h', marker_color='#1d4ed8',
-                text=mkt_sum['m1_vfm'].apply(lambda v: f'${v:,.0f}'),
-                textposition='outside'
-            ))
-            fig_mkt.update_layout(
-                barmode='overlay', height=420, title='Gross Bookings vs. M1 VFM by Market',
-                legend=dict(orientation='h', y=1.05), margin=dict(l=0, r=90, t=40, b=10)
-            )
-            st.plotly_chart(fig_mkt, use_container_width=True)
-
-        with col_b:
-            plat_total = fin_df.groupby('country_upper')['orders'].sum().reset_index(name='total')
-            plat_split = fin_df.groupby(['country_upper', 'client_platform'])['orders'].sum().reset_index()
-            plat_split = plat_split.merge(plat_total, on='country_upper')
-            plat_split['pct'] = plat_split['orders'] / plat_split['total'] * 100
-            country_order_plat = plat_total.sort_values('total', ascending=False)['country_upper'].tolist()
-
-            fig_plat = px.bar(
-                plat_split, x='country_upper', y='pct', color='client_platform',
-                barmode='stack', title='Platform Mix by Market (%)',
-                labels={'country_upper': '', 'pct': 'Share (%)', 'client_platform': 'Client Platform'},
-                category_orders={'country_upper': country_order_plat},
-                color_discrete_map={'iphone': '#007AFF', 'android': '#34C759', 'ipad': '#FF9500'}
-            )
-            fig_plat.update_layout(height=420, margin=dict(l=0, r=0, t=40, b=10))
-            st.plotly_chart(fig_plat, use_container_width=True)
-
-        st.markdown("---")
-
-        # --- Order Quality + Discount Impact ---
-        st.markdown("### Order Health & Discount Impact")
-        st.markdown(
-            '<div class="insight-box">High activation rates signal healthy top-of-funnel growth. '
-            'High refund or cancellation rates erode revenue quality. Discount rates above ~15% of GB warrant review.</div>',
-            unsafe_allow_html=True
-        )
-
-        col_c, col_d = st.columns(2)
-
-        with col_c:
-            q_df = fin_df.groupby('country_upper').agg(
-                orders=('orders', 'sum'),
-                activations=('activations', 'sum'),
-                reactivations=('reactivations', 'sum'),
-                refunded_orders=('refunded_orders', 'sum'),
-                cancelled_orders=('cancelled_orders', 'sum')
-            ).reset_index()
-            denom = q_df['orders'].replace(0, 1)
-            q_df['New Activation'] = q_df['activations'] / denom * 100
-            q_df['Reactivation'] = q_df['reactivations'] / denom * 100
-            q_df['Refund'] = q_df['refunded_orders'] / denom * 100
-            q_df['Cancellation'] = q_df['cancelled_orders'] / denom * 100
-            q_melt = q_df.melt(
-                id_vars='country_upper',
-                value_vars=['New Activation', 'Reactivation', 'Refund', 'Cancellation'],
-                var_name='Metric', value_name='Rate (%)'
-            )
-            fig_q = px.bar(
-                q_melt, x='country_upper', y='Rate (%)', color='Metric', barmode='group',
-                title='Order Quality Rates by Market (%)',
-                labels={'country_upper': ''},
-                color_discrete_map={
-                    'New Activation': '#2ecc71', 'Reactivation': '#3498db',
-                    'Refund': '#e74c3c', 'Cancellation': '#e67e22'
-                }
-            )
-            fig_q.update_layout(height=400, margin=dict(l=0, r=0, t=40, b=10))
-            st.plotly_chart(fig_q, use_container_width=True)
-
-        with col_d:
-            disc_df = fin_df.groupby('country_upper').agg(
-                gross_bookings=('gross_bookings', 'sum'),
-                od_applied=('od_applied', 'sum'),
-                ils_applied=('ils_applied', 'sum'),
-            ).reset_index()
-            denom2 = disc_df['gross_bookings'].replace(0, 1)
-            disc_df['OD Discount'] = abs(disc_df['od_applied']) / denom2 * 100
-            disc_df['ILS Discount'] = abs(disc_df['ils_applied']) / denom2 * 100
-            disc_melt = disc_df.melt(
-                id_vars='country_upper',
-                value_vars=['OD Discount', 'ILS Discount'],
-                var_name='Type', value_name='% of Gross Bookings'
-            )
-            fig_disc = px.bar(
-                disc_melt, x='country_upper', y='% of Gross Bookings',
-                color='Type', barmode='stack',
-                title='Discount Spend as % of Gross Bookings',
-                labels={'country_upper': ''},
-                color_discrete_map={'OD Discount': '#9b59b6', 'ILS Discount': '#1abc9c'}
-            )
-            fig_disc.update_layout(height=400, margin=dict(l=0, r=0, t=40, b=10))
-            st.plotly_chart(fig_disc, use_container_width=True)
-
-        st.markdown("---")
-
-        with st.expander("📋 Daily Summary Table"):
-            daily_sum = fin_df.groupby(['order_created_date', 'country_upper']).agg(
-                orders=('orders', 'sum'),
-                gross_bookings=('gross_bookings', 'sum'),
-                m1_vfm=('m1_vfm', 'sum'),
-                m2_estimate=('m2_estimate', 'sum'),
-                activations=('activations', 'sum'),
-                reactivations=('reactivations', 'sum'),
-                refunded_orders=('refunded_orders', 'sum'),
-            ).reset_index().sort_values(['order_created_date', 'country_upper'], ascending=[False, True])
-
-            st.dataframe(daily_sum, use_container_width=True, hide_index=True,
-                column_config={
-                    "order_created_date": st.column_config.DateColumn("Date", format="YYYY-MM-DD"),
-                    "country_upper": st.column_config.TextColumn("Market"),
-                    "orders": st.column_config.NumberColumn("Orders", format="%d"),
-                    "gross_bookings": st.column_config.NumberColumn("Gross Bookings", format="$%.0f"),
-                    "m1_vfm": st.column_config.NumberColumn("M1 VFM", format="$%.0f"),
-                    "m2_estimate": st.column_config.NumberColumn("M2 Estimate", format="$%.0f"),
-                    "activations": st.column_config.NumberColumn("Activations", format="%d"),
-                    "reactivations": st.column_config.NumberColumn("Reactivations", format="%d"),
-                    "refunded_orders": st.column_config.NumberColumn("Refunds", format="%d"),
-                })
-            st.download_button("📥 Download CSV", daily_sum.to_csv(index=False),
-                               "financial_intl.csv", "text/csv", key="fin_dl")
-
-
-# =============================================================================
-# TAB 3 — COHORT ANALYSIS
+# TAB 1 — COHORT ANALYSIS
 # =============================================================================
 with tab_cohort:
-    # --- Inline cohort-week filter (tab-specific) ---
+    st.caption("New-user cohorts by first-visit week. Each metric shown across cumulative windows (Day 1 / 1–7 / 1–14 / 1–21 / 1–28). Mirrors the NA Android Local-Bucketing report layout, without the groupon_version split (no local bucketing on INTL).")
+
     if coh_df_raw.empty:
         st.warning("No cohort data available.")
-        coh_df = coh_df_raw
     else:
-        available_weeks = sorted(coh_df_raw['cohort_week'].dt.date.unique())
-        default_weeks = available_weeks[-12:] if len(available_weeks) > 12 else available_weeks
-        c_col1, _ = st.columns([2, 3])
-        with c_col1:
-            sel_weeks = st.multiselect(
-                "Cohort weeks", options=available_weeks, default=default_weeks, key="coh_weeks_inline",
-                help="Each row of a cohort is users who first arrived in that week. CVR columns show what % converted in days 1-7, 7-14, 14-28 after their first visit."
-            )
-            if not sel_weeks:
-                sel_weeks = available_weeks
-        coh_df = coh_df_raw[
-            coh_df_raw['country'].isin(selected_countries) &
-            coh_df_raw['cohort_week'].dt.date.isin(sel_weeks)
-        ].copy()
+        coh_df = coh_df_raw[coh_df_raw['country'].isin(selected_countries)].copy()
 
-    if coh_df.empty:
-        st.info("No data for the selected filters.")
-    else:
-        total_new_uvs  = coh_df['new_uvs'].sum()
-        avg_cvr_d1_7   = coh_df['cvr_d1_7_pct'].mean()
-        avg_cvr_d7_14  = coh_df['cvr_d7_14_pct'].mean()
-        avg_cvr_d14_28 = coh_df['cvr_d14_28_pct'].mean()
-        total_buyers   = coh_df['buyers_d1_7'].sum() + coh_df['buyers_d7_14'].sum() + coh_df['buyers_d14_28'].sum()
-
-        # --- KPIs ---
-        k1, k2, k3, k4, k5 = st.columns(5)
-        k1.metric("Total New UVs", f"{total_new_uvs:,.0f}")
-        k2.metric("Total Buyers (28d)", f"{total_buyers:,.0f}")
-        k3.metric("Avg CVR Day 1–7", f"{avg_cvr_d1_7:.2f}%")
-        k4.metric("Avg CVR Day 7–14", f"{avg_cvr_d7_14:.2f}%")
-        k5.metric("Avg CVR Day 14–28", f"{avg_cvr_d14_28:.2f}%")
-
-        st.markdown("---")
-
-        # --- CVR by market and window (primary view) ---
-        st.markdown("### Conversion Rates by Market & Time Window")
-        st.markdown(
-            '<div class="insight-box">Day 1–7 CVR is the strongest signal — users who convert early generate '
-            'the most M1 VFM. Markets with weak D1-7 but strong D7-28 may benefit from re-engagement nudges.</div>',
-            unsafe_allow_html=True
-        )
-
-        cvr_agg = coh_df.groupby('country').agg(
-            cvr_d1_7=('cvr_d1_7_pct', 'mean'),
-            cvr_d7_14=('cvr_d7_14_pct', 'mean'),
-            cvr_d14_28=('cvr_d14_28_pct', 'mean'),
-            new_uvs=('new_uvs', 'sum'),
-        ).reset_index().sort_values('cvr_d1_7', ascending=False)
-
-        cvr_melt = cvr_agg.melt(
-            id_vars='country',
-            value_vars=['cvr_d1_7', 'cvr_d7_14', 'cvr_d14_28'],
-            var_name='Window', value_name='CVR (%)'
-        )
-        cvr_melt['Window'] = cvr_melt['Window'].map({
-            'cvr_d1_7': 'Day 1–7', 'cvr_d7_14': 'Day 7–14', 'cvr_d14_28': 'Day 14–28'
-        })
-        country_order_cvr = cvr_agg['country'].tolist()
-
-        fig_cvr = px.bar(
-            cvr_melt, x='country', y='CVR (%)', color='Window', barmode='group',
-            title='Average CVR by Market & Conversion Window',
-            labels={'country': ''},
-            category_orders={'country': country_order_cvr},
-            color_discrete_map={'Day 1–7': '#2196F3', 'Day 7–14': '#FF9800', 'Day 14–28': '#9C27B0'}
-        )
-        fig_cvr.update_layout(height=400, margin=dict(l=0, r=0, t=40, b=10))
-        st.plotly_chart(fig_cvr, use_container_width=True)
-
-        st.markdown("---")
-
-        # --- M1 VFM per UV + New UVs side by side ---
-        st.markdown("### Revenue Quality & Audience Size")
-        col_a, col_b = st.columns(2)
-
-        with col_a:
-            vfm_agg = coh_df.groupby('country').agg(
-                vfm_d1_7=('m1vfm_per_uv_d1_7_usd', 'mean'),
-                vfm_d7_14=('m1vfm_per_uv_d7_14_usd', 'mean'),
-                vfm_d14_28=('m1vfm_per_uv_d14_28_usd', 'mean'),
-            ).reset_index()
-            vfm_melt = vfm_agg.melt(
-                id_vars='country',
-                value_vars=['vfm_d1_7', 'vfm_d7_14', 'vfm_d14_28'],
-                var_name='Window', value_name='M1 VFM per UV (USD)'
-            )
-            vfm_melt['Window'] = vfm_melt['Window'].map({
-                'vfm_d1_7': 'Day 1–7', 'vfm_d7_14': 'Day 7–14', 'vfm_d14_28': 'Day 14–28'
-            })
-            fig_vfm = px.bar(
-                vfm_melt, x='country', y='M1 VFM per UV (USD)', color='Window', barmode='group',
-                title='M1 VFM per UV by Market & Window',
-                labels={'country': ''},
-                color_discrete_map={'Day 1–7': '#2196F3', 'Day 7–14': '#FF9800', 'Day 14–28': '#9C27B0'}
-            )
-            fig_vfm.update_layout(height=380, margin=dict(l=0, r=0, t=40, b=10))
-            st.plotly_chart(fig_vfm, use_container_width=True)
-
-        with col_b:
-            uvs_sum = coh_df.groupby(['cohort_week', 'country'])['new_uvs'].sum().reset_index()
-            fig_uvs = px.line(
-                uvs_sum, x='cohort_week', y='new_uvs', color='country', markers=True,
-                title='New UVs by Cohort Week & Market',
-                labels={'cohort_week': '', 'new_uvs': 'New UVs', 'country': 'Market'}
-            )
-            fig_uvs.update_layout(height=380, margin=dict(l=0, r=0, t=40, b=10))
-            st.plotly_chart(fig_uvs, use_container_width=True)
-
-        st.markdown("---")
-
-        # --- CVR Heatmap ---
-        st.markdown("### CVR Heatmap — Spot Trends at a Glance")
-        hm_col1, hm_col2 = st.columns([1, 3])
-        with hm_col1:
-            hm_window = st.radio(
-                "Time window",
-                ['Day 1–7', 'Day 7–14', 'Day 14–28'],
-                key="coh_hm_window"
-            )
-        hm_col_map = {
-            'Day 1–7': 'cvr_d1_7_pct',
-            'Day 7–14': 'cvr_d7_14_pct',
-            'Day 14–28': 'cvr_d14_28_pct'
-        }
-        hm_col = hm_col_map[hm_window]
-        heat_df = coh_df.copy()
-        heat_df['week_label'] = heat_df['cohort_week'].dt.strftime('%b %d')
-        heat_pivot = heat_df.pivot_table(values=hm_col, index='country', columns='week_label', aggfunc='mean')
-
-        fig_heat = px.imshow(
-            heat_pivot, text_auto='.2f',
-            title=f'{hm_window} CVR (%) — Market × Cohort Week',
-            labels={'color': 'CVR (%)'},
-            color_continuous_scale='Blues', aspect='auto'
-        )
-        fig_heat.update_layout(height=400, margin=dict(l=0, r=0, t=40, b=10))
-        st.plotly_chart(fig_heat, use_container_width=True)
-
-        st.markdown("---")
-
-        # --- Country Deep Dive ---
-        st.markdown("### Country Deep Dive")
-        deep_country = st.selectbox("Select market", sorted(coh_df['country'].unique()), key="coh_deep")
-        deep_df = coh_df[coh_df['country'] == deep_country].sort_values('cohort_week').copy()
-        deep_df['week_label'] = deep_df['cohort_week'].dt.strftime('Wk %b %d')
-
-        if not deep_df.empty:
-            dd1, dd2 = st.columns(2)
-
-            with dd1:
-                dc = deep_df.melt(
-                    id_vars='week_label',
-                    value_vars=['cvr_d1_7_pct', 'cvr_d7_14_pct', 'cvr_d14_28_pct'],
-                    var_name='Window', value_name='CVR (%)'
+        countries_coh = sorted(coh_df['country'].unique())
+        if not countries_coh:
+            st.info("No cohort data for the selected markets.")
+        else:
+            default_c = 'GB' if 'GB' in countries_coh else countries_coh[0]
+            metric_options = {
+                'Orders': 'orders',
+                'Purchasers': 'purchasers',
+                'CVR (%)': 'cvr',
+                'NOB (USD)': 'nob',
+                'Gross Bookings (USD)': 'gross_bookings',
+                'M1 VFM (USD)': 'm1_vfm',
+                'M1 VFM / UV (USD)': 'm1_vfm_per_uv',
+                'AOV (NOB / order, USD)': 'aov',
+                'Avg M1 VFM / order (USD)': 'avg_m1_vfm',
+                'Deals (Quantity)': 'deals_all',
+                'New UVs (day_01 only)': 'UV',
+            }
+            f1, f2 = st.columns([1, 2])
+            with f1:
+                sel_country_coh = st.selectbox(
+                    "Country", countries_coh,
+                    index=countries_coh.index(default_c), key="coh_country"
                 )
-                dc['Window'] = dc['Window'].map({
-                    'cvr_d1_7_pct': 'Day 1–7', 'cvr_d7_14_pct': 'Day 7–14', 'cvr_d14_28_pct': 'Day 14–28'
-                })
-                fig_dc = px.line(
-                    dc, x='week_label', y='CVR (%)', color='Window', markers=True,
-                    title=f'{deep_country} — CVR Trend by Cohort Week',
-                    color_discrete_map={'Day 1–7': '#2196F3', 'Day 7–14': '#FF9800', 'Day 14–28': '#9C27B0'}
+            with f2:
+                sel_metric_labels = st.multiselect(
+                    "Metrics", list(metric_options.keys()),
+                    default=['Orders', 'CVR (%)', 'M1 VFM (USD)', 'M1 VFM / UV (USD)'],
+                    key="coh_metrics"
                 )
-                fig_dc.update_layout(height=320, margin=dict(l=0, r=0, t=40, b=10))
-                st.plotly_chart(fig_dc, use_container_width=True)
 
-            with dd2:
-                fig_dv = px.bar(
-                    deep_df, x='week_label', y='new_uvs',
-                    title=f'{deep_country} — New UVs per Cohort Week',
-                    labels={'week_label': '', 'new_uvs': 'New UVs'},
-                    color_discrete_sequence=['#3498db'], text='new_uvs'
-                )
-                fig_dv.update_traces(texttemplate='%{text:,.0f}', textposition='outside')
-                fig_dv.update_layout(height=320, margin=dict(l=0, r=0, t=40, b=10))
-                st.plotly_chart(fig_dv, use_container_width=True)
+            cdf = coh_df[coh_df['country'] == sel_country_coh].copy().sort_values('cohort_week')
 
-            vfm_deep = deep_df.melt(
-                id_vars='week_label',
-                value_vars=['m1vfm_per_uv_d1_7_usd', 'm1vfm_per_uv_d7_14_usd', 'm1vfm_per_uv_d14_28_usd'],
-                var_name='Window', value_name='M1 VFM per UV (USD)'
-            )
-            vfm_deep['Window'] = vfm_deep['Window'].map({
-                'm1vfm_per_uv_d1_7_usd': 'Day 1–7',
-                'm1vfm_per_uv_d7_14_usd': 'Day 7–14',
-                'm1vfm_per_uv_d14_28_usd': 'Day 14–28'
-            })
-            fig_dv2 = px.bar(
-                vfm_deep, x='week_label', y='M1 VFM per UV (USD)', color='Window', barmode='group',
-                title=f'{deep_country} — M1 VFM per UV by Window',
-                labels={'week_label': ''},
-                color_discrete_map={'Day 1–7': '#2196F3', 'Day 7–14': '#FF9800', 'Day 14–28': '#9C27B0'}
-            )
-            fig_dv2.update_layout(height=320, margin=dict(l=0, r=0, t=40, b=10))
-            st.plotly_chart(fig_dv2, use_container_width=True)
+            if cdf.empty or not sel_metric_labels:
+                st.info("Pick at least one metric. No data for the selected country if cohort is empty.")
+            else:
+                window_labels = {
+                    'day_01': 'Day 1', 'day_01_07': 'Day 1–7', 'day_01_14': 'Day 1–14',
+                    'day_01_21': 'Day 1–21', 'day_01_28': 'Day 1–28',
+                }
+                fmt_by_metric = {
+                    'orders': '{:,.0f}', 'purchasers': '{:,.0f}', 'deals_all': '{:,.0f}',
+                    'UV': '{:,.0f}',
+                    'cvr': '{:.2f}%',
+                    'nob': '${:,.0f}', 'gross_bookings': '${:,.0f}', 'm1_vfm': '${:,.0f}',
+                    'm1_vfm_per_uv': '${:,.4f}', 'aov': '${:,.2f}', 'avg_m1_vfm': '${:,.2f}',
+                }
 
-        with st.expander("📋 Full Cohort Table"):
-            coh_show = coh_df.copy().sort_values(['cohort_week', 'country'], ascending=[False, True])
-            coh_show['cohort_week'] = coh_show['cohort_week'].dt.strftime('%Y-%m-%d')
-            st.dataframe(coh_show, use_container_width=True, hide_index=True,
-                column_config={
-                    "country": st.column_config.TextColumn("Market"),
-                    "cohort_week": st.column_config.TextColumn("Cohort Week"),
-                    "new_uvs": st.column_config.NumberColumn("New UVs", format="%d"),
-                    "buyers_d1_7": st.column_config.NumberColumn("Buyers D1-7", format="%d"),
-                    "cvr_d1_7_pct": st.column_config.NumberColumn("CVR D1-7 (%)", format="%.2f"),
-                    "m1vfm_per_uv_d1_7_usd": st.column_config.NumberColumn("VFM/UV D1-7", format="$%.4f"),
-                    "buyers_d7_14": st.column_config.NumberColumn("Buyers D7-14", format="%d"),
-                    "cvr_d7_14_pct": st.column_config.NumberColumn("CVR D7-14 (%)", format="%.2f"),
-                    "m1vfm_per_uv_d7_14_usd": st.column_config.NumberColumn("VFM/UV D7-14", format="$%.4f"),
-                    "buyers_d14_28": st.column_config.NumberColumn("Buyers D14-28", format="%d"),
-                    "cvr_d14_28_pct": st.column_config.NumberColumn("CVR D14-28 (%)", format="%.2f"),
-                    "m1vfm_per_uv_d14_28_usd": st.column_config.NumberColumn("VFM/UV D14-28", format="$%.4f"),
-                })
-            st.download_button("📥 Download CSV", coh_show.to_csv(index=False),
-                               "cohort_intl.csv", "text/csv", key="coh_dl")
+                def compute_metric(row, mkey, win):
+                    if mkey == 'UV':
+                        return row['UV']
+                    uv = row['UV']
+                    if mkey == 'cvr':
+                        p = row[f'{win}_purchasers']
+                        return (p / uv * 100) if uv > 0 else None
+                    if mkey == 'aov':
+                        o = row[f'{win}_orders']
+                        return (row[f'{win}_nob'] / o) if o > 0 else None
+                    if mkey == 'm1_vfm_per_uv':
+                        return (row[f'{win}_m1_vfm'] / uv) if uv > 0 else None
+                    if mkey == 'avg_m1_vfm':
+                        o = row[f'{win}_orders']
+                        return (row[f'{win}_m1_vfm'] / o) if o > 0 else None
+                    return row[f'{win}_{mkey}']
+
+                # --- One formatted table per selected metric (rows = cohort week, cols = windows) ---
+                for metric_label in sel_metric_labels:
+                    mkey = metric_options[metric_label]
+                    rows = []
+                    for _, row in cdf.iterrows():
+                        r = {'Cohort Week': row['cohort_week'].strftime('%Y-%m-%d')}
+                        if mkey == 'UV':
+                            r['New UVs'] = row['UV']
+                        else:
+                            for w in COHORT_WINDOWS:
+                                r[window_labels[w]] = compute_metric(row, mkey, w)
+                        rows.append(r)
+                    tbl = pd.DataFrame(rows)
+
+                    st.markdown(f"#### {metric_label}")
+                    value_cols = [c for c in tbl.columns if c != 'Cohort Week']
+                    fmt_str = fmt_by_metric.get(mkey, '{:,.2f}')
+                    fmt_map = {c: (lambda v, f=fmt_str: '' if pd.isna(v) else f.format(v)) for c in value_cols}
+                    try:
+                        styled = (tbl.style
+                                  .format(fmt_map)
+                                  .background_gradient(cmap='RdYlGn', subset=value_cols, axis=None))
+                        st.dataframe(styled, use_container_width=True, hide_index=True)
+                    except Exception:
+                        st.dataframe(tbl, use_container_width=True, hide_index=True)
+
+                # --- Line chart of primary metric across cohort weeks, one line per window ---
+                primary_label = sel_metric_labels[0]
+                pkey = metric_options[primary_label]
+                st.markdown("---")
+                st.markdown(f"### {primary_label} — trend across cohort weeks")
+                chart_rows = []
+                for _, row in cdf.iterrows():
+                    for w in COHORT_WINDOWS:
+                        if pkey == 'UV' and w != 'day_01':
+                            continue
+                        v = compute_metric(row, pkey, w)
+                        if v is None:
+                            continue
+                        chart_rows.append({
+                            'Cohort Week': row['cohort_week'],
+                            'Window': window_labels[w],
+                            'Value': v,
+                        })
+                if chart_rows:
+                    chart_df = pd.DataFrame(chart_rows)
+                    fig_coh = px.line(
+                        chart_df, x='Cohort Week', y='Value', color='Window', markers=True,
+                        labels={'Value': primary_label},
+                        color_discrete_map={
+                            'Day 1': '#1f77b4', 'Day 1–7': '#2196F3', 'Day 1–14': '#FF9800',
+                            'Day 1–21': '#9C27B0', 'Day 1–28': '#2ecc71',
+                        },
+                        title=f"{sel_country_coh} — {primary_label}",
+                    )
+                    fig_coh.update_layout(height=380, margin=dict(l=0, r=0, t=40, b=10))
+                    st.plotly_chart(fig_coh, use_container_width=True)
+
+                # --- Raw data + CSV ---
+                with st.expander("📋 Raw cohort data"):
+                    raw = cdf.copy()
+                    raw['cohort_week'] = raw['cohort_week'].dt.strftime('%Y-%m-%d')
+                    st.dataframe(raw, use_container_width=True, hide_index=True)
+                    st.download_button(
+                        "📥 Download CSV", raw.to_csv(index=False),
+                        f"cohort_{sel_country_coh}.csv", "text/csv", key="coh_dl"
+                    )
 
 
 # =============================================================================
-# TAB 4 — ASK KAI
+# TAB 2 — ASK KAI
 # =============================================================================
 with tab_kai:
     st.markdown("### 🤖 Ask Kai — Your INTL Markets Analyst")
