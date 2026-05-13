@@ -327,10 +327,11 @@ with st.sidebar:
 st.markdown("# 🌍 INTL APP Markets by countries")
 st.markdown("Sidebar holds global Markets filter. Tab-specific filters live inline next to the relevant table/chart.")
 
-tab_yoy, tab_cohort, tab_kai = st.tabs([
+tab_yoy, tab_cohort, tab_kai, tab_docs = st.tabs([
     "📈 YoY Trends",
     "🔄 Cohort Analysis",
-    "🤖 Ask Kai"
+    "🤖 Ask Kai",
+    "📚 Docs"
 ])
 
 
@@ -717,3 +718,174 @@ with tab_kai:
             if pending:
                 st.session_state.pending_approval = pending
             st.rerun()
+
+
+# =============================================================================
+# TAB 3 — DOCS
+# =============================================================================
+with tab_docs:
+    st.markdown("## 📚 INTL Markets Analytics — Documentation")
+    st.caption("How the dashboard works, what it measures, and what it deliberately does not.")
+
+    st.markdown("---")
+
+    st.markdown("### ⚠️ Important: no MBNXT vs Legacy comparison on INTL")
+    st.markdown(
+        """
+The INTL ramp-up does **not** use local bucketing, so there is **no clean MBNXT-vs-Legacy comparison
+available** on INTL traffic.
+
+- A single-version filter ("show me MBNXT users' trend over time") is fine — it's a directional read of one cohort.
+- A **side-by-side comparison** ("MBNXT users had X% higher CVR than Legacy users") is **not defensible** — it suffers
+  from *second-launch bias*: a user bucketed as MBNXT can still purchase on the Legacy app on their first session,
+  so purchases get attributed to the wrong bucket.
+
+This was a deliberate decision for the INTL ramp, not a tracking gap. Per-batch measurement is **before-vs-after
+trend monitoring**, not MBNXT-vs-Legacy.
+"""
+    )
+
+    st.markdown("---")
+
+    st.markdown("### 📈 YoY Trends tab")
+    st.markdown(
+        """
+**Purpose.** Weekly Year-over-Year and Week-over-Week trends per country, mirroring Radomír's NA YoY sheet.
+
+**Inline filters.**
+
+- **Country** — single select (default GB).
+- **Groupon Version** — All / legacy / mbnxt (single-select). Side-by-side comparison is invalid (see above);
+  use this to scope a trend to one version at a time.
+- **OS** — multiselect (default iOS). iOS + Android can be combined.
+
+**Tables.** Three stacked tables (M1 VFM, M1 VFM per UV, Distinct UVs). Columns:
+
+| Column | Meaning |
+|---|---|
+| ISO Week | ISO week number (1–53) |
+| 2024 / 2025 / 2026 | Metric value for that ISO week × year |
+| {year} YoY % | Year-over-year change vs the prior year |
+| WoW % | Week-over-week change within the latest year |
+
+Color scale: red → yellow → green from −50% to +50% (clipped at ±50% to keep outliers from washing out the rest).
+
+**Data sources.**
+
+- `kbc-grpn-40-0cd2.out_c_intl_app_yoy_trends.weekly_yoy_INTL_app` — weekly aggregates from `unit_economics`,
+  filtered to INTL countries, `event_platform LIKE 'app%'`, `user_brand_affiliation = 'groupon'`,
+  `event_type IN ('authorize', 'capture')`, `last_status <> 'cancel'`.
+- `kbc-grpn-40-0cd2.out_c_intl_app_yoy_trends.weekly_uv_INTL_app` — weekly distinct bcookies from
+  `junoHourly_analytics`, filtered to mobile + INTL + groupon brand + bot-excluded.
+"""
+    )
+
+    st.markdown("---")
+
+    st.markdown("### 🔄 Cohort Analysis tab")
+    st.markdown(
+        """
+**Purpose.** New-user cohorts by first-visit week. Mirrors the NA Android Local-Bucketing report layout,
+without the groupon_version split (see "no MBNXT vs Legacy" note above).
+
+**Cohort definition.** A "cohort" is the set of bcookies whose `first_event_date` falls in a given ISO week.
+Source: `out_c_00_new_bcookie_identifier.bcookie_first_event_date`.
+
+**Inline filters.**
+
+- **Country** — single select (default GB).
+- **Metric** — single select (drives the entire table view).
+
+**Time windows.** The table has five **cumulative** windows per row:
+
+| Window | Days included | What it captures |
+|---|---|---|
+| Day 1 | day 0 only | Performance on first day of acquisition |
+| Day 1–7 | days 0–7 | First week activity (cumulative) |
+| Day 1–14 | days 0–14 | First two weeks (cumulative) |
+| Day 1–21 | days 0–21 | First three weeks (cumulative) |
+| Day 1–28 | days 0–28 | First four weeks (cumulative) — the full 28-day cohort window |
+
+**Available metrics.** Direct from the cohort table (per window):
+
+| Metric | Definition |
+|---|---|
+| Orders | Distinct `parent_order_uuid` count, event_type ∈ {authorize, capture}, last_status ≠ cancel |
+| Purchasers | Distinct bcookies with at least one order in the window |
+| NOB | Net Order Bookings (USD) — sum of `nob_loc × fx_rate_loc_to_usd_fxn` |
+| Gross Bookings | `gross_bookings_operational × fx_rate_loc_to_usd_fxn` |
+| M1 VFM | `(margin_1_operational + vfm_operational) × fx_rate_loc_to_usd_fxn` |
+| Deals (Quantity) | Sum of `per_unit_quantity` across all orders in the window |
+| ILS / OD Applied | Item-Level / Order-level discount totals (negative values; display as absolute) |
+
+**Derived metrics** (computed in the dashboard, not in SQL):
+
+| Metric | Formula |
+|---|---|
+| CVR (%) | `purchasers / UV × 100` |
+| AOV (USD) | `NOB / orders` (volume-weighted average order value) |
+| M1 VFM / UV | `M1 VFM / UV` |
+| Avg M1 VFM / order | `M1 VFM / orders` |
+
+**Plot below the table.** Line chart of the selected metric × cohort_week, one line per window.
+
+**Data source.** `kbc-grpn-40-0cd2.out_c_testing_data_apps.cohort_INTL_app`. Schema mirrors the Android
+local-bucketing pattern (5 windows × 13 base metrics + UV at day_01).
+"""
+    )
+
+    st.markdown("---")
+
+    st.markdown("### 🤖 Ask Kai tab")
+    st.markdown(
+        """
+AI assistant powered by Keboola Kai. Has access to this data app's source code and underlying tables;
+ask analytical questions in natural language. Approves tool calls before executing them.
+"""
+    )
+
+    st.markdown("---")
+
+    st.markdown("### Data refresh + retention")
+    st.markdown(
+        """
+- **Cohort transformation** (`Data apps - INTL app dashboard`) — daily run (once scheduled). Each run
+  recomputes the trailing 26 weeks of cohorts and upserts on `(country, cohort_week)`. Older history is
+  preserved indefinitely from the backfill (currently 2025-04-14 → 2026-04-13).
+- **YoY transformation** (`INTL app YoY trends`) — backfilled through 2026-05-10; daily incremental refresh
+  rebuilds the trailing week and rolls forward.
+- **Dashboard cache** — Streamlit caches every loader for **5 minutes** (`@st.cache_data(ttl=300)`). To force
+  a fresh pull, use the "Clear cache" menu or wait 5 min.
+"""
+    )
+
+    st.markdown("---")
+
+    st.markdown("### Known gotchas")
+    st.markdown(
+        """
+- **Most recent cohort week is partial.** The SQL bounds `cohort_end = today - 29 days` to ensure 28+ days
+  of post-cohort observation. The newest week shown may still be under-counted relative to older weeks if
+  fewer than 7 full days have passed.
+- **US and Quebec excluded.** All INTL queries filter out `country IN ('US', 'QC')`. Rest of Canada is INTL.
+- **Mobile-app only.** Cohort + YoY both filter to `event_platform LIKE 'app%'` (UE) and `platform = 'mobile'` (juno).
+  Web traffic is not in scope.
+- **Groupon brand only.** `LOWER(user_brand_affiliation) = 'groupon'` — excludes other brands.
+- **Bot filter.** `isBot = 'false' OR isBot IS NULL` on juno side; bots otherwise inflate UV counts.
+- **`country = 'UK'` in juno → mapped to `'GB'`** for consistency with `feature_country` in unit_economics.
+"""
+    )
+
+    st.markdown("---")
+
+    st.markdown("### Contact")
+    st.markdown(
+        """
+- BI analyst: **Daniel Herzog** (dherzog@groupon.com)
+- BI owner: **Pavel Cernik**
+- BI approver: **Michal Zachar**
+- Program manager: **Bogdana Boncheva**
+
+Repo: `github.com:dherzog-svg/Keboola_app_data`. Push to `main` → manual redeploy in Keboola UI.
+"""
+    )
