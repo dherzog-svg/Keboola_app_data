@@ -659,17 +659,13 @@ with tab_kai:
         3. Redeploy the app
         """)
     else:
-        # Suggested PO-level questions
+        # Suggested PO-level questions — kept narrow to the YoY + Cohort scope of the current dashboard
         st.markdown("**Strategic questions for the Product Owner:**")
         suggestions = [
-            "Which 3 markets have the highest ROI potential based on CVR and M1 VFM per UV?",
-            "Where should we prioritize acquisition spend — which markets have the lowest active UV rate?",
-            "What is the revenue at risk from refund rates above average across all markets?",
-            "Which cohort week produced the best quality users by M1 VFM per UV in D1-7?",
-            "Compare iOS vs Android performance — which platform drives better M1 VFM per order?",
-            "Which markets show declining CVR trends across cohort weeks — where are we losing momentum?",
-            "What would total M1 VFM look like if the bottom 3 markets matched the top 3 CVR?",
-            "Summarise the discount strategy: which markets are most dependent on OD or ILS discounts?",
+            "Which markets show improving YoY weekly M1 VFM per UV in 2026 vs 2025, and which are declining?",
+            "How does the latest cohort week's Day 1–28 M1 VFM per UV compare to the average of the previous 8 cohort weeks, per market?",
+            "Rank markets by their most recent cohort week's CVR in the Day 1–7 window — which markets convert new users fastest?",
+            "For each market, how much extra M1 VFM comes from Day 1–28 vs Day 1–7 — which markets monetize new users beyond the first week?",
         ]
 
         s_cols = st.columns(2)
