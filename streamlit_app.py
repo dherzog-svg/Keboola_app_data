@@ -305,18 +305,13 @@ with st.sidebar:
         list(coh_df_raw['country'].dropna().unique() if not coh_df_raw.empty else []) +
         list(yoy_df_raw['country_code'].dropna().unique() if not yoy_df_raw.empty else [])
     ))
-    core_countries = all_countries
-    st.markdown('<p class="section-label">Markets</p>', unsafe_allow_html=True)
-    select_all_mkts = st.checkbox("Select all", value=True, key="select_all_mkts")
-    if select_all_mkts:
-        selected_countries = core_countries
-    else:
-        selected_countries = st.multiselect(
-            "Select markets", options=all_countries, default=core_countries,
-            label_visibility="collapsed", key="global_countries"
-        )
-        if not selected_countries:
-            selected_countries = core_countries
+    default_country = 'GB' if 'GB' in all_countries else (all_countries[0] if all_countries else None)
+    st.markdown('<p class="section-label">Country</p>', unsafe_allow_html=True)
+    selected_country = st.selectbox(
+        "Country", all_countries,
+        index=all_countries.index(default_country) if default_country else 0,
+        label_visibility="collapsed", key="global_country",
+    )
 
     if KAI_AVAILABLE and STORAGE_API_TOKEN:
         st.markdown("---")
@@ -332,7 +327,7 @@ with st.sidebar:
 # PAGE HEADER
 # =============================================================================
 st.markdown("# 🌍 INTL APP Markets by countries")
-st.markdown("Sidebar holds global Markets filter. Tab-specific filters live inline next to the relevant table/chart.")
+st.markdown("Sidebar holds the global Country filter — applies to both tabs. Tab-specific filters (Groupon Version, OS, Metric) live inline next to the relevant table.")
 
 tab_yoy, tab_cohort, tab_kai, tab_docs = st.tabs([
     "📈 YoY Trends",
@@ -351,16 +346,9 @@ with tab_yoy:
     if yoy_df_raw.empty or yoy_uv_df_raw.empty:
         st.warning("YoY tables not yet available. The data load may still be in progress. Check `weekly_yoy_INTL_app` and `weekly_uv_INTL_app`.")
     else:
-        # --- Inline filters ---
-        f1, f2, f3 = st.columns([1, 1, 2])
-        with f1:
-            countries_yoy = sorted(yoy_df_raw['country_code'].dropna().unique())
-            default_country = 'GB' if 'GB' in countries_yoy else (countries_yoy[0] if countries_yoy else None)
-            sel_country = st.selectbox(
-                "Country", countries_yoy,
-                index=countries_yoy.index(default_country) if default_country else 0,
-                key="yoy_country"
-            )
+        # --- Inline filters (Country is in the global sidebar) ---
+        sel_country = selected_country
+        f2, f3 = st.columns([1, 2])
         with f2:
             version_opts = ['All', 'legacy', 'mbnxt']
             sel_version = st.selectbox(
@@ -496,13 +484,12 @@ with tab_cohort:
     if coh_df_raw.empty:
         st.warning("No cohort data available.")
     else:
-        coh_df = coh_df_raw[coh_df_raw['country'].isin(selected_countries)].copy()
+        sel_country_coh = selected_country
+        coh_df = coh_df_raw[coh_df_raw['country'] == sel_country_coh].copy()
 
-        countries_coh = sorted(coh_df['country'].unique())
-        if not countries_coh:
-            st.info("No cohort data for the selected markets.")
+        if coh_df.empty:
+            st.info(f"No cohort data for {sel_country_coh}.")
         else:
-            default_c = 'GB' if 'GB' in countries_coh else countries_coh[0]
             metric_options = {
                 'Orders': 'orders',
                 'Purchasers': 'purchasers',
@@ -516,20 +503,13 @@ with tab_cohort:
                 'Deals (Quantity)': 'deals_all',
                 'New UVs (day_01 only)': 'UV',
             }
-            f1, f2 = st.columns([1, 2])
-            with f1:
-                sel_country_coh = st.selectbox(
-                    "Country", countries_coh,
-                    index=countries_coh.index(default_c), key="coh_country"
-                )
-            with f2:
-                sel_metric_label = st.selectbox(
-                    "Metric", list(metric_options.keys()),
-                    index=list(metric_options.keys()).index('Orders'),
-                    key="coh_metric"
-                )
+            sel_metric_label = st.selectbox(
+                "Metric", list(metric_options.keys()),
+                index=list(metric_options.keys()).index('Orders'),
+                key="coh_metric"
+            )
 
-            cdf = coh_df[coh_df['country'] == sel_country_coh].copy().sort_values('cohort_week')
+            cdf = coh_df.copy().sort_values('cohort_week')
 
             if cdf.empty:
                 st.info("No cohort data for the selected country.")
