@@ -2,6 +2,7 @@ import asyncio
 import os
 import streamlit as st
 import pandas as pd
+import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
 
@@ -231,6 +232,10 @@ def load_cohort_data():
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
     df['cohort_week'] = pd.to_datetime(df['cohort_week'])
+    df = (df.sort_values('UV', ascending=False)
+            .drop_duplicates(subset=['country', 'cohort_week'], keep='first')
+            .sort_values(['country', 'cohort_week'])
+            .reset_index(drop=True))
     return df
 
 @st.cache_data(ttl=300)
@@ -257,8 +262,10 @@ def load_yoy_data():
 def load_yoy_uv_data():
     df = query_data('''
     SELECT `iso_year`, `iso_week`, `iso_year_week`, `iso_week_start`,
-           `country_code`, `operating_system`, `weekly_distinct_bcookies`
+           `country_code`, `operating_system`,
+           MAX(`weekly_distinct_bcookies`) AS weekly_distinct_bcookies
     FROM `kbc-grpn-40-0cd2`.`out_c_intl_app_yoy_trends`.`weekly_uv_INTL_app`
+    GROUP BY 1, 2, 3, 4, 5, 6
     ''')
     for col in ['iso_year','iso_week','weekly_distinct_bcookies']:
         if col in df.columns:
@@ -339,7 +346,7 @@ tab_yoy, tab_cohort, tab_kai, tab_docs = st.tabs([
 # TAB 0 — YoY TRENDS
 # =============================================================================
 with tab_yoy:
-    st.caption("Weekly Year-over-Year and Week-over-Week trends for the INTL App, mirroring Radomir's NA YoY sheet. Currently scoped to **iOS** only; backfill in progress so prior-year YoY% may be incomplete.")
+    st.caption("Weekly Year-over-Year and Week-over-Week trends for the INTL App, mirroring Radomir's NA YoY sheet. **2024 data starts at ISO week 19** (backfill window: 2024-05-06 → 2024-12-23) — earlier weeks show blank, and 2025 YoY% vs 2024 is blank wherever 2024 has no data.")
 
     if yoy_df_raw.empty or yoy_uv_df_raw.empty:
         st.warning("YoY tables not yet available. The data load may still be in progress. Check `weekly_yoy_INTL_app` and `weekly_uv_INTL_app`.")
@@ -408,13 +415,16 @@ with tab_yoy:
                 pivot = pivot.sort_index()  # ISO weeks 1..53
                 pivot = pivot.reindex(sorted(pivot.columns), axis=1)  # years left→right oldest→newest
                 years = list(pivot.columns)
-                # Year-over-year columns
+                # Year-over-year columns — mask zero/missing prior-year to avoid +inf% on partial backfills
                 for i in range(1, len(years)):
-                    pivot[f"{years[i]} YoY %"] = (pivot[years[i]] / pivot[years[i-1]] - 1) * 100
+                    prior = pivot[years[i-1]].replace(0, np.nan)
+                    pivot[f"{years[i]} YoY %"] = (pivot[years[i]] / prior - 1) * 100
                 # WoW % for the latest year
                 if years:
                     latest = years[-1]
                     pivot['WoW %'] = pivot[latest].pct_change() * 100
+                # Clean any residual inf values (e.g. float roundoff) → blank
+                pivot = pivot.replace([np.inf, -np.inf], np.nan)
                 # Oldest week first
                 pivot = pivot.sort_index(ascending=True)
 
