@@ -567,7 +567,9 @@ with tab_cohort:
                 mkey = metric_options[sel_metric_label]
                 rows = []
                 for _, row in cdf.iterrows():
-                    r = {'Cohort Week': row['cohort_week'].strftime('%Y-%m-%d')}
+                    cw = row['cohort_week']
+                    _, iso_w, _ = cw.isocalendar()
+                    r = {'Cohort Week': f"W{iso_w} — {cw.strftime('%Y-%m-%d')}"}
                     if mkey == 'UV':
                         r['New UVs'] = row['UV']
                     else:
