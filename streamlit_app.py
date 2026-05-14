@@ -518,6 +518,13 @@ with tab_cohort:
                     'day_01': 'Day 1', 'day_01_07': 'Day 1–7', 'day_01_14': 'Day 1–14',
                     'day_01_21': 'Day 1–21', 'day_01_28': 'Day 1–28',
                 }
+                # Min days that must have elapsed since cohort_week start for the window
+                # to be fully observable. UE has T+1 lag, so we need today - cohort_week >= window_days.
+                window_min_days = {
+                    'day_01': 1, 'day_01_07': 7, 'day_01_14': 14,
+                    'day_01_21': 21, 'day_01_28': 28,
+                }
+                today_ts = pd.Timestamp.today().normalize()
                 fmt_by_metric = {
                     'orders': '{:,.0f}', 'purchasers': '{:,.0f}', 'deals_all': '{:,.0f}',
                     'UV': '{:,.0f}',
@@ -529,6 +536,9 @@ with tab_cohort:
                 def compute_metric(row, mkey, win):
                     if mkey == 'UV':
                         return row['UV']
+                    # Mask cells where the cumulative window has not fully matured
+                    if (today_ts - row['cohort_week']).days < window_min_days[win]:
+                        return None
                     uv = row['UV']
                     if mkey == 'cvr':
                         p = row[f'{win}_purchasers']
