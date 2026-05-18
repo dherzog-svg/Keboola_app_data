@@ -242,7 +242,7 @@ def load_cohort_data():
 def load_yoy_data():
     df = query_data('''
     SELECT `iso_year`, `iso_week`, `iso_year_week`, `iso_week_start`,
-           `country_code`, `groupon_version`, `operating_system`,
+           `country_code`, `operating_system`,
            SUM(`m1_vfm`) AS m1_vfm,
            SUM(`gross_bookings`) AS gross_bookings,
            SUM(`orders`) AS orders,
@@ -250,7 +250,7 @@ def load_yoy_data():
            SUM(`activations`) AS activations,
            SUM(`purchasers`) AS purchasers
     FROM `kbc-grpn-40-0cd2`.`out_c_intl_app_yoy_trends`.`weekly_yoy_INTL_app`
-    GROUP BY 1, 2, 3, 4, 5, 6, 7
+    GROUP BY 1, 2, 3, 4, 5, 6
     ''')
     for col in ['iso_year','iso_week','m1_vfm','gross_bookings','orders','nob','activations','purchasers']:
         if col in df.columns:
@@ -327,7 +327,7 @@ with st.sidebar:
 # PAGE HEADER
 # =============================================================================
 st.markdown("# 🌍 INTL APP Markets by countries")
-st.markdown("Sidebar holds the global Country filter — applies to both tabs. Tab-specific filters (Groupon Version, OS, Metric) live inline next to the relevant table.")
+st.markdown("Sidebar holds the global Country filter — applies to both tabs. Tab-specific filters (OS, Metric) live inline next to the relevant table.")
 
 tab_yoy, tab_cohort, tab_kai, tab_docs = st.tabs([
     "📈 YoY Trends",
@@ -348,17 +348,9 @@ with tab_yoy:
     else:
         # --- Inline filters (Country is in the global sidebar) ---
         sel_country = selected_country
-        f2, f3 = st.columns([1, 2])
-        with f2:
-            version_opts = ['All', 'legacy', 'mbnxt']
-            sel_version = st.selectbox(
-                "Groupon Version", version_opts, index=0, key="yoy_version",
-                help="Side-by-side MBNXT-vs-Legacy isn't measurable on INTL (no local bucketing). Pick a single version for a within-cohort YoY read."
-            )
-        with f3:
-            os_opts = sorted(yoy_df_raw['operating_system'].dropna().unique())
-            default_os = ['iOS'] if 'iOS' in os_opts else os_opts[:1]
-            sel_os = st.multiselect("OS", os_opts, default=default_os, key="yoy_os")
+        os_opts = sorted(yoy_df_raw['operating_system'].dropna().unique())
+        default_os = ['iOS'] if 'iOS' in os_opts else os_opts[:1]
+        sel_os = st.multiselect("OS", os_opts, default=default_os, key="yoy_os")
 
         if not sel_os:
             st.warning("Pick at least one OS.")
@@ -373,13 +365,10 @@ with tab_yoy:
             (yoy_uv_df_raw['country_code'] == sel_country) &
             (yoy_uv_df_raw['operating_system'].isin(sel_os))
         ]
-        if sel_version != 'All':
-            yoy_f = yoy_f[yoy_f['groupon_version'] == sel_version]
-
         if yoy_f.empty:
-            st.warning(f"No data for {sel_country} / {sel_version} / {'+'.join(sel_os)}.")
+            st.warning(f"No data for {sel_country} / {'+'.join(sel_os)}.")
         else:
-            # Aggregate daily-grain → weekly (sum over groupon_version if "All", sum over days within a week)
+            # Aggregate daily-grain → weekly (sum over days within a week)
             weekly_yoy = yoy_f.groupby(['iso_year', 'iso_week', 'iso_year_week', 'iso_week_start'], as_index=False).agg(
                 m1_vfm=('m1_vfm', 'sum'),
                 orders=('orders', 'sum'),
@@ -462,7 +451,7 @@ with tab_yoy:
             fig = px.line(chart_df, x='iso_week', y=mc, color='iso_year_str',
                           markers=True,
                           labels={'iso_week': 'ISO Week', mc: metric_choice, 'iso_year_str': 'Year'},
-                          title=f"{metric_choice} — {sel_country} / {sel_version} / {'+'.join(sel_os)}")
+                          title=f"{metric_choice} — {sel_country} / {'+'.join(sel_os)}")
             fig.update_layout(height=380, margin=dict(l=0, r=0, t=40, b=10))
             st.plotly_chart(fig, use_container_width=True)
 
@@ -471,7 +460,7 @@ with tab_yoy:
             with st.expander("📋 Raw weekly data"):
                 st.dataframe(weekly, use_container_width=True, hide_index=True)
                 st.download_button("📥 Download CSV", weekly.to_csv(index=False),
-                                   f"yoy_{sel_country}_{sel_version}_{'-'.join(sel_os)}.csv", "text/csv", key="yoy_dl")
+                                   f"yoy_{sel_country}_{'-'.join(sel_os)}.csv", "text/csv", key="yoy_dl")
 
 
 
@@ -753,8 +742,6 @@ trend monitoring**, not MBNXT-vs-Legacy.
 **Inline filters.**
 
 - **Country** — single select (default GB).
-- **Groupon Version** — All / legacy / mbnxt (single-select). Side-by-side comparison is invalid (see above);
-  use this to scope a trend to one version at a time.
 - **OS** — multiselect (default iOS). iOS + Android can be combined.
 
 **Tables.** Three stacked tables (M1 VFM, M1 VFM per UV, Distinct UVs). Columns:
