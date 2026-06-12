@@ -390,15 +390,22 @@ with tab_yoy:
             def render_yoy_table_daily(df, metric_col, metric_label, fmt_fn):
                 df = df[['order_created_date', 'iso_year', 'iso_week', metric_col]].copy()
                 df['weekday_num'] = df['order_created_date'].dt.dayofweek
-                df['weekday_abbr'] = df['order_created_date'].dt.strftime('%a')
+                df['weekday_name'] = df['order_created_date'].dt.strftime('%A')
                 df['sort_val'] = df['iso_week'] * 10 + df['weekday_num']
-                df['day_key'] = 'W' + df['iso_week'].astype(str).str.zfill(2) + ' ' + df['weekday_abbr']
-                agg = df.groupby(['sort_val', 'day_key', 'iso_year'], as_index=False)[metric_col].sum()
+                agg = df.groupby(['sort_val', 'iso_year', 'iso_week', 'weekday_name'], as_index=False)[metric_col].sum()
+                # Track actual date for the latest year (for the Date column)
+                date_map = (
+                    df.groupby(['sort_val', 'iso_year'], as_index=False)['order_created_date'].first()
+                )
                 pivot = agg.pivot_table(
                     index='sort_val', columns='iso_year', values=metric_col, aggfunc='sum'
                 ).sort_index()
-                key_map = agg.drop_duplicates('sort_val').set_index('sort_val')['day_key']
+                meta = agg.drop_duplicates('sort_val').set_index('sort_val')[['iso_week', 'weekday_name']]
                 years = sorted([c for c in pivot.columns if isinstance(c, (int, float, np.integer))])
+                latest_dates = (
+                    date_map[date_map['iso_year'] == years[-1]].set_index('sort_val')['order_created_date']
+                    if years else pd.Series(dtype='object')
+                )
                 for i in range(1, len(years)):
                     prior = pivot[years[i - 1]].replace(0, np.nan)
                     pivot[f"{int(years[i])} YoY %"] = (pivot[years[i]] / prior - 1) * 100
@@ -407,7 +414,9 @@ with tab_yoy:
                 pivot = pivot.replace([np.inf, -np.inf], np.nan)
                 pivot = pivot.sort_index(ascending=False)
                 show = pivot.reset_index()
-                show.insert(1, 'Week-Day', show['sort_val'].map(key_map))
+                show.insert(1, 'ISO Week',    show['sort_val'].map(meta['iso_week']))
+                show.insert(2, 'Day of Week', show['sort_val'].map(meta['weekday_name']))
+                show.insert(3, 'Date',        show['sort_val'].map(latest_dates).dt.strftime('%Y-%m-%d'))
                 show = show.drop(columns=['sort_val'])
                 pct_cols = [c for c in show.columns if isinstance(c, str) and '%' in c]
                 year_cols = [c for c in show.columns if c in years]
