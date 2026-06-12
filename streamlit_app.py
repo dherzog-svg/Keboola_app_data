@@ -369,23 +369,15 @@ with tab_yoy:
             )
             uv_d = uv.groupby(['event_date', 'iso_year', 'iso_week'], as_index=False).agg(
                 daily_uvs=('daily_uvs', 'sum'),
-            )
+            ).rename(columns={'event_date': 'order_created_date'})
 
-            daily = fin_d.merge(
-                uv_d.rename(columns={'event_date': 'order_created_date'}),
+            # M1/UV only for days where both tables have data (inner join)
+            muv = fin_d.merge(
+                uv_d[['order_created_date', 'iso_year', 'iso_week', 'daily_uvs']],
                 on=['order_created_date', 'iso_year', 'iso_week'],
-                how='outer'
+                how='inner'
             )
-            daily['m1_vfm'] = daily['m1_vfm'].fillna(0)
-            daily['daily_uvs'] = daily['daily_uvs'].fillna(0)
-            mask = daily['iso_year'].isna()
-            if mask.any():
-                iso = daily.loc[mask, 'order_created_date'].dt.isocalendar()
-                daily.loc[mask, 'iso_year'] = iso.year.values
-                daily.loc[mask, 'iso_week'] = iso.week.values
-            daily['iso_year'] = daily['iso_year'].astype(int)
-            daily['iso_week'] = daily['iso_week'].astype(int)
-            daily['m1_vfm_per_uv'] = daily['m1_vfm'] / daily['daily_uvs'].replace(0, np.nan)
+            muv['m1_vfm_per_uv'] = muv['m1_vfm'] / muv['daily_uvs'].replace(0, np.nan)
 
             def render_yoy_table_daily(df, metric_col, metric_label, fmt_fn):
                 import datetime as _dt
@@ -412,11 +404,11 @@ with tab_yoy:
                 if years:
                     pivot['DoD %'] = pivot[years[-1]].pct_change(fill_method=None) * 100
                 pivot = pivot.replace([np.inf, -np.inf], np.nan)
-                pivot = pivot.sort_index(ascending=False)
+                pivot = pivot.sort_index(ascending=True)
                 show = pivot.reset_index()
-                show.insert(1, 'ISO Week',    show['sort_val'].map(meta['iso_week']))
+                show.insert(1, 'Date',        show['sort_val'].apply(_iso_date))
                 show.insert(2, 'Day of Week', show['sort_val'].map(meta['weekday_name']))
-                show.insert(3, 'Date',        show['sort_val'].apply(_iso_date))
+                show.insert(3, 'ISO Week',    show['sort_val'].map(meta['iso_week']))
                 show = show.drop(columns=['sort_val'])
                 pct_cols = [c for c in show.columns if isinstance(c, str) and '%' in c]
                 year_cols = [c for c in show.columns if c in years]
@@ -440,18 +432,18 @@ with tab_yoy:
                 st.markdown(f'### {metric_label}')
                 st.dataframe(styled, use_container_width=True, hide_index=True)
 
-            render_yoy_table_daily(daily, 'm1_vfm',        '💰 M1 VFM',        "$%.0f")
-            render_yoy_table_daily(daily, 'm1_vfm_per_uv', '💵 M1 VFM per UV', "$%.2f")
-            render_yoy_table_daily(daily, 'daily_uvs',     '👥 Distinct UVs',  "%.0f")
+            render_yoy_table_daily(fin_d, 'm1_vfm',        '💰 M1 VFM',        "$%.0f")
+            render_yoy_table_daily(muv,   'm1_vfm_per_uv', '💵 M1 VFM per UV', "$%.2f")
+            render_yoy_table_daily(uv_d,  'daily_uvs',     '👥 Distinct UVs',  "%.0f")
 
             st.markdown("---")
             st.markdown("### Trend chart")
             metric_choice = st.radio(
                 "Metric", ["M1 VFM", "M1 VFM per UV", "Distinct UVs"], horizontal=True, key="yoy_metric_chart"
             )
-            metric_map = {"M1 VFM": "m1_vfm", "M1 VFM per UV": "m1_vfm_per_uv", "Distinct UVs": "daily_uvs"}
-            mc = metric_map[metric_choice]
-            chart_df = daily[['iso_year', 'order_created_date', mc]].dropna(subset=[mc]).copy()
+            metric_map = {"M1 VFM": ("m1_vfm", fin_d), "M1 VFM per UV": ("m1_vfm_per_uv", muv), "Distinct UVs": ("daily_uvs", uv_d)}
+            mc, chart_src = metric_map[metric_choice]
+            chart_df = chart_src[['iso_year', 'order_created_date', mc]].dropna(subset=[mc]).copy()
             chart_df = chart_df[chart_df[mc] > 0].copy()
             chart_df['iso_year_str'] = chart_df['iso_year'].astype(int).astype(str)
             chart_df['day_of_year'] = chart_df['order_created_date'].dt.dayofyear
@@ -466,9 +458,9 @@ with tab_yoy:
 
             st.markdown("---")
             with st.expander("📋 Raw daily data"):
-                st.dataframe(daily, use_container_width=True, hide_index=True)
+                st.dataframe(fin_d, use_container_width=True, hide_index=True)
                 st.download_button(
-                    "📥 Download CSV", daily.to_csv(index=False),
+                    "📥 Download CSV", fin_d.to_csv(index=False),
                     f"daily_yoy_{sel_country}_{'-'.join(sel_os)}.csv", "text/csv", key="yoy_dl"
                 )
 
