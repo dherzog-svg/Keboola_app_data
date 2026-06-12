@@ -388,35 +388,35 @@ with tab_yoy:
             daily['m1_vfm_per_uv'] = daily['m1_vfm'] / daily['daily_uvs'].replace(0, np.nan)
 
             def render_yoy_table_daily(df, metric_col, metric_label, fmt_fn):
+                import datetime as _dt
                 df = df[['order_created_date', 'iso_year', 'iso_week', metric_col]].copy()
                 df['weekday_num'] = df['order_created_date'].dt.dayofweek
                 df['weekday_name'] = df['order_created_date'].dt.strftime('%A')
                 df['sort_val'] = df['iso_week'] * 10 + df['weekday_num']
                 agg = df.groupby(['sort_val', 'iso_year', 'iso_week', 'weekday_name'], as_index=False)[metric_col].sum()
-                # Track actual date for the latest year (for the Date column)
-                date_map = (
-                    df.groupby(['sort_val', 'iso_year'], as_index=False)['order_created_date'].first()
-                )
                 pivot = agg.pivot_table(
                     index='sort_val', columns='iso_year', values=metric_col, aggfunc='sum'
                 ).sort_index()
                 meta = agg.drop_duplicates('sort_val').set_index('sort_val')[['iso_week', 'weekday_name']]
                 years = sorted([c for c in pivot.columns if isinstance(c, (int, float, np.integer))])
-                latest_dates = (
-                    date_map[date_map['iso_year'] == years[-1]].set_index('sort_val')['order_created_date']
-                    if years else pd.Series(dtype='object')
-                )
+                # Compute date mathematically for every row so future weeks aren't blank
+                latest_year = int(years[-1]) if years else pd.Timestamp.now().year
+                def _iso_date(sv):
+                    try:
+                        return _dt.date.fromisocalendar(latest_year, int(sv) // 10, int(sv) % 10 + 1).strftime('%Y-%m-%d')
+                    except Exception:
+                        return ''
                 for i in range(1, len(years)):
                     prior = pivot[years[i - 1]].replace(0, np.nan)
                     pivot[f"{int(years[i])} YoY %"] = (pivot[years[i]] / prior - 1) * 100
                 if years:
-                    pivot['DoD %'] = pivot[years[-1]].pct_change() * 100
+                    pivot['DoD %'] = pivot[years[-1]].pct_change(fill_method=None) * 100
                 pivot = pivot.replace([np.inf, -np.inf], np.nan)
                 pivot = pivot.sort_index(ascending=False)
                 show = pivot.reset_index()
                 show.insert(1, 'ISO Week',    show['sort_val'].map(meta['iso_week']))
                 show.insert(2, 'Day of Week', show['sort_val'].map(meta['weekday_name']))
-                show.insert(3, 'Date',        show['sort_val'].map(latest_dates).dt.strftime('%Y-%m-%d'))
+                show.insert(3, 'Date',        show['sort_val'].apply(_iso_date))
                 show = show.drop(columns=['sort_val'])
                 pct_cols = [c for c in show.columns if isinstance(c, str) and '%' in c]
                 year_cols = [c for c in show.columns if c in years]
