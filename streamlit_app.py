@@ -337,7 +337,7 @@ tab_yoy, tab_cohort, tab_kai, tab_docs = st.tabs([
 # TAB 0 — YoY TRENDS
 # =============================================================================
 with tab_yoy:
-    st.caption("Daily data by ISO week + weekday. Rows = (Week, Day-of-week), columns = per-year values with YoY% and DoD%.")
+    st.caption("Daily data by ISO week + weekday. Rows = (Week, Day-of-week), columns = per-year values with YoY%, DoD%, and WoW%.")
 
     if yoy_df_raw.empty or yoy_uv_df_raw.empty:
         st.warning("Daily YoY tables not yet available — run the **INTL app YoY trends** transformation first (outputs: `daily_yoy_INTL_app`, `daily_uv_INTL_app`).")
@@ -403,6 +403,13 @@ with tab_yoy:
                     pivot[f"{int(years[i])} YoY %"] = (pivot[years[i]] / prior - 1) * 100
                 if years:
                     pivot['DoD %'] = pivot[years[-1]].pct_change(fill_method=None) * 100
+                    prev_sv = pivot.index - 10
+                    wow_prior = pivot[years[-1]].reindex(prev_sv).values
+                    pivot['WoW %'] = (
+                        pivot[years[-1]].values
+                        / np.where(wow_prior == 0, np.nan, wow_prior)
+                        - 1
+                    ) * 100
                 pivot = pivot.replace([np.inf, -np.inf], np.nan)
                 pivot = pivot.sort_index(ascending=True)
                 show = pivot.reset_index()
