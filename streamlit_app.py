@@ -241,36 +241,29 @@ def load_cohort_data():
 @st.cache_data(ttl=300)
 def load_yoy_data():
     df = query_data('''
-    SELECT `iso_year`, `iso_week`, `iso_year_week`, `iso_week_start`,
-           `country_code`, `operating_system`,
-           SUM(`m1_vfm`) AS m1_vfm,
-           SUM(`gross_bookings`) AS gross_bookings,
-           SUM(`orders`) AS orders,
-           SUM(`nob`) AS nob,
-           SUM(`activations`) AS activations,
-           SUM(`purchasers`) AS purchasers
-    FROM `kbc-grpn-40-0cd2`.`out_c_intl_app_yoy_trends`.`weekly_yoy_INTL_app`
-    GROUP BY 1, 2, 3, 4, 5, 6
+    SELECT
+      `order_created_date`, `iso_year`, `iso_week`, `country_code`, `operating_system`,
+      SUM(`m1_vfm`) AS m1_vfm, SUM(`orders`) AS orders
+    FROM `kbc-grpn-40-0cd2`.`out_c_intl_app_yoy_trends`.`daily_yoy_INTL_app`
+    GROUP BY 1, 2, 3, 4, 5
     ''')
-    for col in ['iso_year','iso_week','m1_vfm','gross_bookings','orders','nob','activations','purchasers']:
+    for col in ['iso_year', 'iso_week', 'm1_vfm', 'orders']:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
-    df['iso_week_start'] = pd.to_datetime(df['iso_week_start'])
+    df['order_created_date'] = pd.to_datetime(df['order_created_date'])
     return df
 
 @st.cache_data(ttl=300)
 def load_yoy_uv_data():
     df = query_data('''
-    SELECT `iso_year`, `iso_week`, `iso_year_week`, `iso_week_start`,
-           `country_code`, `operating_system`,
-           MAX(`weekly_distinct_bcookies`) AS weekly_distinct_bcookies
-    FROM `kbc-grpn-40-0cd2`.`out_c_intl_app_yoy_trends`.`weekly_uv_INTL_app`
-    GROUP BY 1, 2, 3, 4, 5, 6
+    SELECT
+      `event_date`, `country_code`, `operating_system`,
+      SUM(`daily_distinct_bcookies`) AS daily_uvs
+    FROM `kbc-grpn-40-0cd2`.`out_c_intl_app_yoy_trends`.`daily_uv_INTL_app`
+    GROUP BY 1, 2, 3
     ''')
-    for col in ['iso_year','iso_week','weekly_distinct_bcookies']:
-        if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
-    df['iso_week_start'] = pd.to_datetime(df['iso_week_start'])
+    df['daily_uvs'] = pd.to_numeric(df.get('daily_uvs', 0), errors='coerce').fillna(0)
+    df['event_date'] = pd.to_datetime(df['event_date'])
     return df
 
 
@@ -341,12 +334,11 @@ tab_yoy, tab_cohort, tab_kai, tab_docs = st.tabs([
 # TAB 0 — YoY TRENDS
 # =============================================================================
 with tab_yoy:
-    st.caption("Weekly Year-over-Year and Week-over-Week trends for the INTL App, mirroring Radomir's NA YoY sheet. **2024 data starts at ISO week 19** (backfill window: 2024-05-06 → 2024-12-23) — earlier weeks show blank, and 2025 YoY% vs 2024 is blank wherever 2024 has no data.")
+    st.caption("Daily DoD / WoW / YoY trends. Country from sidebar. Color: green positive, red negative (scale ±30%).")
 
     if yoy_df_raw.empty or yoy_uv_df_raw.empty:
-        st.warning("YoY tables not yet available. The data load may still be in progress. Check `weekly_yoy_INTL_app` and `weekly_uv_INTL_app`.")
+        st.warning("Daily YoY tables not yet available — run the **INTL app YoY trends** transformation first (outputs: `daily_yoy_INTL_app`, `daily_uv_INTL_app`).")
     else:
-        # --- Inline filters (Country is in the global sidebar) ---
         sel_country = selected_country
         os_opts = sorted(yoy_df_raw['operating_system'].dropna().unique())
         default_os = ['iOS'] if 'iOS' in os_opts else os_opts[:1]
@@ -356,111 +348,99 @@ with tab_yoy:
             st.warning("Pick at least one OS.")
             st.stop()
 
-        # --- Filter + aggregate to weekly grain ---
-        yoy_f = yoy_df_raw[
+        fin = yoy_df_raw[
             (yoy_df_raw['country_code'] == sel_country) &
             (yoy_df_raw['operating_system'].isin(sel_os))
-        ]
-        uv_f = yoy_uv_df_raw[
+        ].copy()
+        uv = yoy_uv_df_raw[
             (yoy_uv_df_raw['country_code'] == sel_country) &
             (yoy_uv_df_raw['operating_system'].isin(sel_os))
-        ]
-        if yoy_f.empty:
+        ].copy()
+
+        if fin.empty:
             st.warning(f"No data for {sel_country} / {'+'.join(sel_os)}.")
         else:
-            # Aggregate daily-grain → weekly (sum over days within a week)
-            weekly_yoy = yoy_f.groupby(['iso_year', 'iso_week', 'iso_year_week', 'iso_week_start'], as_index=False).agg(
+            # Aggregate across OS if multiple selected
+            fin_d = fin.groupby('order_created_date', as_index=False).agg(
                 m1_vfm=('m1_vfm', 'sum'),
                 orders=('orders', 'sum'),
-                gross_bookings=('gross_bookings', 'sum'),
-                nob=('nob', 'sum'),
             )
-            # UV table is already weekly grain
-            weekly_uv = uv_f.groupby(['iso_year', 'iso_week', 'iso_year_week', 'iso_week_start'], as_index=False).agg(
-                uvs=('weekly_distinct_bcookies', 'sum')
+            uv_d = uv.groupby('event_date', as_index=False).agg(
+                daily_uvs=('daily_uvs', 'sum'),
             )
-            weekly = weekly_yoy.merge(weekly_uv, on=['iso_year', 'iso_week', 'iso_year_week', 'iso_week_start'], how='outer')
-            weekly['m1_vfm_per_uv'] = weekly.apply(
-                lambda r: (r['m1_vfm'] / r['uvs']) if r.get('uvs', 0) and r['uvs'] > 0 else None,
-                axis=1
+
+            # Merge financial + UV on date
+            df = fin_d.merge(uv_d, left_on='order_created_date', right_on='event_date', how='outer')
+            df['date'] = df['order_created_date'].fillna(df['event_date'])
+            df = df.drop(columns=['order_created_date', 'event_date'], errors='ignore')
+            df = df.sort_values('date').reset_index(drop=True)
+
+            # Derive week metadata from date
+            df['iso_week'] = df['date'].dt.isocalendar().week.astype(int)
+            df['week_day'] = df['date'].dt.strftime('%A')
+
+            # M1 VFM / UV
+            df['m1_vfm_per_uv'] = df['m1_vfm'] / df['daily_uvs'].replace(0, np.nan)
+
+            # DoD / WoW / YoY via self-join on date
+            def pct_chg(df, col, lag):
+                ref = df[['date', col]].rename(columns={col: '_r'})
+                ref = ref.copy()
+                ref['date'] = ref['date'] + pd.Timedelta(days=lag)
+                m = df.merge(ref, on='date', how='left')
+                return (m[col] - m['_r']) / m['_r'].abs().replace(0, np.nan)
+
+            df['m1_dod']  = pct_chg(df, 'm1_vfm',        1)
+            df['m1_wow']  = pct_chg(df, 'm1_vfm',        7)
+            df['m1_yoy']  = pct_chg(df, 'm1_vfm',        364)
+            df['muv_wow'] = pct_chg(df, 'm1_vfm_per_uv', 7)
+            df['muv_yoy'] = pct_chg(df, 'm1_vfm_per_uv', 364)
+            df['uv_wow']  = pct_chg(df, 'daily_uvs',     7)
+            df['uv_yoy']  = pct_chg(df, 'daily_uvs',     364)
+
+            df = df.sort_values('date', ascending=False).reset_index(drop=True)
+
+            disp = pd.DataFrame({
+                'ISO Week':  df['iso_week'],
+                'Week day':  df['week_day'],
+                'Date':      df['date'].dt.strftime('%Y-%m-%d'),
+                'M1_VFM':    df['m1_vfm'],
+                'DoD':       df['m1_dod'],
+                'WoW':       df['m1_wow'],
+                'YoY':       df['m1_yoy'],
+                'M1_VFM/UV': df['m1_vfm_per_uv'],
+                'M1/UV WoW': df['muv_wow'],
+                'M1/UV YoY': df['muv_yoy'],
+                'Daily UVs': df['daily_uvs'],
+                'UVs WoW':   df['uv_wow'],
+                'UVs YoY':   df['uv_yoy'],
+            })
+
+            pct_cols = ['DoD', 'WoW', 'YoY', 'M1/UV WoW', 'M1/UV YoY', 'UVs WoW', 'UVs YoY']
+
+            def _clr(v, cap=0.3):
+                if pd.isna(v):
+                    return ''
+                i = min(abs(v), cap) / cap
+                if v >= 0:
+                    return f'background-color: rgba(40,167,69,{i * 0.6:.2f})'
+                return f'background-color: rgba(220,53,69,{i * 0.6:.2f})'
+
+            fmt_map = {
+                'M1_VFM':    lambda v: '' if pd.isna(v) else f'${v:,.0f}',
+                'M1_VFM/UV': lambda v: '' if pd.isna(v) else f'${v:.2f}',
+                'Daily UVs': lambda v: '' if pd.isna(v) else f'{v:,.0f}',
+            }
+            for c in pct_cols:
+                fmt_map[c] = lambda v: '' if pd.isna(v) else f'{v:.0%}'
+
+            styled = disp.style.format(fmt_map).map(_clr, subset=pct_cols)
+            st.dataframe(styled, use_container_width=True, hide_index=True)
+
+            st.download_button(
+                '📥 Download CSV', df.to_csv(index=False),
+                f'daily_{sel_country}_{"-".join(sel_os)}.csv', 'text/csv', key='yoy_dl'
             )
-            weekly = weekly.sort_values(['iso_year', 'iso_week']).reset_index(drop=True)
-
-            # --- Render a YoY table per metric ---
-            def render_yoy_table(metric_col, metric_label, fmt_fn):
-                pivot = weekly.pivot_table(index='iso_week', columns='iso_year', values=metric_col, aggfunc='sum')
-                pivot = pivot.sort_index()  # ISO weeks 1..53
-                pivot = pivot.reindex(sorted(pivot.columns), axis=1)  # years left→right oldest→newest
-                years = list(pivot.columns)
-                # Year-over-year columns — mask zero/missing prior-year to avoid +inf% on partial backfills
-                for i in range(1, len(years)):
-                    prior = pivot[years[i-1]].replace(0, np.nan)
-                    pivot[f"{years[i]} YoY %"] = (pivot[years[i]] / prior - 1) * 100
-                # WoW % for the latest year
-                if years:
-                    latest = years[-1]
-                    pivot['WoW %'] = pivot[latest].pct_change() * 100
-                # Clean any residual inf values (e.g. float roundoff) → blank
-                pivot = pivot.replace([np.inf, -np.inf], np.nan)
-                # Oldest week first
-                pivot = pivot.sort_index(ascending=True)
-
-                st.markdown(f"### {metric_label}")
-                show = pivot.reset_index().rename(columns={'iso_week': 'ISO Week'})
-
-                pct_cols = [c for c in show.columns if isinstance(c, str) and "%" in c]
-                year_cols = [c for c in show.columns if c in years]
-
-                def _pct_bg(v, cap=50.0):
-                    if pd.isna(v):
-                        return ''
-                    intensity = min(abs(v), cap) / cap
-                    if v >= 0:
-                        r = int(255 - intensity * 127)
-                        g = int(255 - intensity * 56)
-                        b = int(255 - intensity * 127)
-                    else:
-                        r = int(255 - intensity * 23)
-                        g = int(255 - intensity * 127)
-                        b = int(255 - intensity * 127)
-                    return f'background-color: rgb({r},{g},{b})'
-
-                fmt_map = {"ISO Week": "{:d}"}
-                for c in year_cols:
-                    fmt_map[c] = lambda v, ff=fmt_fn: '' if pd.isna(v) else (ff % v)
-                for c in pct_cols:
-                    fmt_map[c] = lambda v: '' if pd.isna(v) else f"{v:+.1f}%"
-
-                styled = show.style.format(fmt_map).map(_pct_bg, subset=pct_cols)
-                st.dataframe(styled, use_container_width=True, hide_index=True)
-
-            render_yoy_table('m1_vfm', '💰 M1 VFM', "$%.0f")
-            render_yoy_table('m1_vfm_per_uv', '💵 M1 VFM per UV', "$%.2f")
-            render_yoy_table('uvs', '👥 Distinct UVs', "%.0f")
-
-            # --- Optional line chart per metric ---
-            st.markdown("---")
-            st.markdown("### Trend chart")
-            metric_choice = st.radio(
-                "Metric", ["M1 VFM", "M1 VFM per UV", "Distinct UVs"], horizontal=True, key="yoy_metric_chart"
-            )
-            metric_map = {"M1 VFM": "m1_vfm", "M1 VFM per UV": "m1_vfm_per_uv", "Distinct UVs": "uvs"}
-            mc = metric_map[metric_choice]
-            chart_df = weekly[['iso_year', 'iso_week', mc]].dropna(subset=[mc]).copy()
-            chart_df['iso_year_str'] = chart_df['iso_year'].astype(int).astype(str)
-            fig = px.line(chart_df, x='iso_week', y=mc, color='iso_year_str',
-                          markers=True,
-                          labels={'iso_week': 'ISO Week', mc: metric_choice, 'iso_year_str': 'Year'},
-                          title=f"{metric_choice} — {sel_country} / {'+'.join(sel_os)}")
-            fig.update_layout(height=380, margin=dict(l=0, r=0, t=40, b=10))
-            st.plotly_chart(fig, use_container_width=True)
-
-            # --- Download ---
-            st.markdown("---")
-            with st.expander("📋 Raw weekly data"):
-                st.dataframe(weekly, use_container_width=True, hide_index=True)
-                st.download_button("📥 Download CSV", weekly.to_csv(index=False),
-                                   f"yoy_{sel_country}_{'-'.join(sel_os)}.csv", "text/csv", key="yoy_dl")
 
 
 
@@ -737,30 +717,37 @@ trend monitoring**, not MBNXT-vs-Legacy.
     st.markdown("### 📈 YoY Trends tab")
     st.markdown(
         """
-**Purpose.** Weekly Year-over-Year and Week-over-Week trends per country, mirroring Radomír's NA YoY sheet.
+**Purpose.** Daily DoD / WoW / YoY trends per country. Single table, most recent day first.
 
 **Inline filters.**
 
 - **Country** — single select (default GB).
-- **OS** — multiselect (default iOS). iOS + Android can be combined.
+- **OS** — multiselect (default iOS). Multiple OS values are summed.
 
-**Tables.** Three stacked tables (M1 VFM, M1 VFM per UV, Distinct UVs). Columns:
+**Table columns.**
 
 | Column | Meaning |
 |---|---|
-| ISO Week | ISO week number (1–53) |
-| 2024 / 2025 / 2026 | Metric value for that ISO week × year |
-| {year} YoY % | Year-over-year change vs the prior year |
-| WoW % | Week-over-week change within the latest year |
+| ISO Week | ISO week number |
+| Week day | Day name (Monday … Sunday) |
+| Date | Calendar date |
+| M1_VFM | Daily M1 VFM (USD) |
+| DoD | Day-over-Day change (vs previous calendar day) |
+| WoW | Week-over-Week change (vs same day 7 days ago) |
+| YoY | Year-over-Year change (vs same day 364 days ago) |
+| M1_VFM/UV | M1 VFM / Daily UVs |
+| M1/UV WoW / YoY | WoW and YoY for M1_VFM/UV |
+| Daily UVs | Distinct bcookies from juno |
+| UVs WoW / YoY | WoW and YoY for Daily UVs |
 
-Color scale: red → yellow → green from −50% to +50% (clipped at ±50% to keep outliers from washing out the rest).
+Color scale: green positive, red negative (scale ±30%).
 
 **Data sources.**
 
-- `kbc-grpn-40-0cd2.out_c_intl_app_yoy_trends.weekly_yoy_INTL_app` — weekly aggregates from `unit_economics`,
+- `kbc-grpn-40-0cd2.out_c_intl_app_yoy_trends.daily_yoy_INTL_app` — daily financial metrics from `unit_economics`,
   filtered to INTL countries, `event_platform LIKE 'app%'`, `user_brand_affiliation = 'groupon'`,
   `event_type IN ('authorize', 'capture')`, `last_status <> 'cancel'`.
-- `kbc-grpn-40-0cd2.out_c_intl_app_yoy_trends.weekly_uv_INTL_app` — weekly distinct bcookies from
+- `kbc-grpn-40-0cd2.out_c_intl_app_yoy_trends.daily_uv_INTL_app` — daily distinct bcookies from
   `junoHourly_analytics`, filtered to mobile + INTL + groupon brand + bot-excluded.
 """
     )
@@ -837,8 +824,9 @@ ask analytical questions in natural language. Approves tool calls before executi
 - **Cohort transformation** (`Data apps - INTL app dashboard`) — daily run (once scheduled). Each run
   recomputes the trailing 26 weeks of cohorts and upserts on `(country, cohort_week)`. Older history is
   preserved indefinitely from the backfill (currently 2025-04-14 → 2026-04-13).
-- **YoY transformation** (`INTL app YoY trends`) — backfilled through 2026-05-10; daily incremental refresh
-  rebuilds the trailing week and rolls forward.
+- **YoY transformation** (`INTL app YoY trends`) — outputs `daily_yoy_INTL_app` (full-replace, daily financial)
+  and `daily_uv_INTL_app` (incremental, last-3-days UV window). Initial UV backfill: run once with
+  `BACKFILL_FROM = DATE_SUB(CURRENT_DATE, INTERVAL 400 DAY)` in the `days_to_delete` block to seed 13+ months.
 - **Dashboard cache** — Streamlit caches every loader for **5 minutes** (`@st.cache_data(ttl=300)`). To force
   a fresh pull, use the "Clear cache" menu or wait 5 min.
 """
