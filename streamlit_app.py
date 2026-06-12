@@ -257,12 +257,15 @@ def load_yoy_data():
 def load_yoy_uv_data():
     df = query_data('''
     SELECT
-      `event_date`, `country_code`, `operating_system`,
+      `event_date`, `iso_year`, `iso_week`, `country_code`, `operating_system`,
       SUM(`daily_distinct_bcookies`) AS daily_uvs
     FROM `kbc-grpn-40-0cd2`.`out_c_intl_app_yoy_trends`.`daily_uv_INTL_app`
-    GROUP BY 1, 2, 3
+    GROUP BY 1, 2, 3, 4, 5
     ''')
     df['daily_uvs'] = pd.to_numeric(df.get('daily_uvs', 0), errors='coerce').fillna(0)
+    for col in ['iso_year', 'iso_week']:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0).astype(int)
     df['event_date'] = pd.to_datetime(df['event_date'])
     return df
 
@@ -334,7 +337,7 @@ tab_yoy, tab_cohort, tab_kai, tab_docs = st.tabs([
 # TAB 0 — YoY TRENDS
 # =============================================================================
 with tab_yoy:
-    st.caption("Daily DoD / WoW / YoY trends. Country from sidebar. Color: green positive, red negative (scale ±30%).")
+    st.caption("Daily data by ISO week + weekday. Rows = (Week, Day-of-week), columns = per-year values with YoY% and DoD%.")
 
     if yoy_df_raw.empty or yoy_uv_df_raw.empty:
         st.warning("Daily YoY tables not yet available — run the **INTL app YoY trends** transformation first (outputs: `daily_yoy_INTL_app`, `daily_uv_INTL_app`).")
@@ -360,87 +363,105 @@ with tab_yoy:
         if fin.empty:
             st.warning(f"No data for {sel_country} / {'+'.join(sel_os)}.")
         else:
-            # Aggregate across OS if multiple selected
-            fin_d = fin.groupby('order_created_date', as_index=False).agg(
+            fin_d = fin.groupby(['order_created_date', 'iso_year', 'iso_week'], as_index=False).agg(
                 m1_vfm=('m1_vfm', 'sum'),
                 orders=('orders', 'sum'),
             )
-            uv_d = uv.groupby('event_date', as_index=False).agg(
+            uv_d = uv.groupby(['event_date', 'iso_year', 'iso_week'], as_index=False).agg(
                 daily_uvs=('daily_uvs', 'sum'),
             )
 
-            # Merge financial + UV on date
-            df = fin_d.merge(uv_d, left_on='order_created_date', right_on='event_date', how='outer')
-            df['date'] = df['order_created_date'].fillna(df['event_date'])
-            df = df.drop(columns=['order_created_date', 'event_date'], errors='ignore')
-            df = df.sort_values('date').reset_index(drop=True)
-
-            # Derive week metadata from date
-            df['iso_week'] = df['date'].dt.isocalendar().week.astype(int)
-            df['week_day'] = df['date'].dt.strftime('%A')
-
-            # M1 VFM / UV
-            df['m1_vfm_per_uv'] = df['m1_vfm'] / df['daily_uvs'].replace(0, np.nan)
-
-            # DoD / WoW / YoY via self-join on date
-            def pct_chg(df, col, lag):
-                ref = df[['date', col]].rename(columns={col: '_r'})
-                ref = ref.copy()
-                ref['date'] = ref['date'] + pd.Timedelta(days=lag)
-                m = df.merge(ref, on='date', how='left')
-                return (m[col] - m['_r']) / m['_r'].abs().replace(0, np.nan)
-
-            df['m1_dod']  = pct_chg(df, 'm1_vfm',        1)
-            df['m1_wow']  = pct_chg(df, 'm1_vfm',        7)
-            df['m1_yoy']  = pct_chg(df, 'm1_vfm',        364)
-            df['muv_wow'] = pct_chg(df, 'm1_vfm_per_uv', 7)
-            df['muv_yoy'] = pct_chg(df, 'm1_vfm_per_uv', 364)
-            df['uv_wow']  = pct_chg(df, 'daily_uvs',     7)
-            df['uv_yoy']  = pct_chg(df, 'daily_uvs',     364)
-
-            df = df.sort_values('date', ascending=False).reset_index(drop=True)
-
-            disp = pd.DataFrame({
-                'ISO Week':  df['iso_week'],
-                'Week day':  df['week_day'],
-                'Date':      df['date'].dt.strftime('%Y-%m-%d'),
-                'M1_VFM':    df['m1_vfm'],
-                'DoD':       df['m1_dod'],
-                'WoW':       df['m1_wow'],
-                'YoY':       df['m1_yoy'],
-                'M1_VFM/UV': df['m1_vfm_per_uv'],
-                'M1/UV WoW': df['muv_wow'],
-                'M1/UV YoY': df['muv_yoy'],
-                'Daily UVs': df['daily_uvs'],
-                'UVs WoW':   df['uv_wow'],
-                'UVs YoY':   df['uv_yoy'],
-            })
-
-            pct_cols = ['DoD', 'WoW', 'YoY', 'M1/UV WoW', 'M1/UV YoY', 'UVs WoW', 'UVs YoY']
-
-            def _clr(v, cap=0.3):
-                if pd.isna(v):
-                    return ''
-                i = min(abs(v), cap) / cap
-                if v >= 0:
-                    return f'background-color: rgba(40,167,69,{i * 0.6:.2f})'
-                return f'background-color: rgba(220,53,69,{i * 0.6:.2f})'
-
-            fmt_map = {
-                'M1_VFM':    lambda v: '' if pd.isna(v) else f'${v:,.0f}',
-                'M1_VFM/UV': lambda v: '' if pd.isna(v) else f'${v:.2f}',
-                'Daily UVs': lambda v: '' if pd.isna(v) else f'{v:,.0f}',
-            }
-            for c in pct_cols:
-                fmt_map[c] = lambda v: '' if pd.isna(v) else f'{v:.0%}'
-
-            styled = disp.style.format(fmt_map).map(_clr, subset=pct_cols)
-            st.dataframe(styled, use_container_width=True, hide_index=True)
-
-            st.download_button(
-                '📥 Download CSV', df.to_csv(index=False),
-                f'daily_{sel_country}_{"-".join(sel_os)}.csv', 'text/csv', key='yoy_dl'
+            daily = fin_d.merge(
+                uv_d.rename(columns={'event_date': 'order_created_date'}),
+                on=['order_created_date', 'iso_year', 'iso_week'],
+                how='outer'
             )
+            daily['m1_vfm'] = daily['m1_vfm'].fillna(0)
+            daily['daily_uvs'] = daily['daily_uvs'].fillna(0)
+            mask = daily['iso_year'].isna()
+            if mask.any():
+                iso = daily.loc[mask, 'order_created_date'].dt.isocalendar()
+                daily.loc[mask, 'iso_year'] = iso.year.values
+                daily.loc[mask, 'iso_week'] = iso.week.values
+            daily['iso_year'] = daily['iso_year'].astype(int)
+            daily['iso_week'] = daily['iso_week'].astype(int)
+            daily['m1_vfm_per_uv'] = daily['m1_vfm'] / daily['daily_uvs'].replace(0, np.nan)
+
+            def render_yoy_table_daily(df, metric_col, metric_label, fmt_fn):
+                df = df[['order_created_date', 'iso_year', 'iso_week', metric_col]].copy()
+                df['weekday_num'] = df['order_created_date'].dt.dayofweek
+                df['weekday_abbr'] = df['order_created_date'].dt.strftime('%a')
+                df['sort_val'] = df['iso_week'] * 10 + df['weekday_num']
+                df['day_key'] = 'W' + df['iso_week'].astype(str).str.zfill(2) + ' ' + df['weekday_abbr']
+                agg = df.groupby(['sort_val', 'day_key', 'iso_year'], as_index=False)[metric_col].sum()
+                pivot = agg.pivot_table(
+                    index='sort_val', columns='iso_year', values=metric_col, aggfunc='sum'
+                ).sort_index()
+                key_map = agg.drop_duplicates('sort_val').set_index('sort_val')['day_key']
+                years = sorted([c for c in pivot.columns if isinstance(c, (int, float, np.integer))])
+                for i in range(1, len(years)):
+                    prior = pivot[years[i - 1]].replace(0, np.nan)
+                    pivot[f"{int(years[i])} YoY %"] = (pivot[years[i]] / prior - 1) * 100
+                if years:
+                    pivot['DoD %'] = pivot[years[-1]].pct_change() * 100
+                pivot = pivot.replace([np.inf, -np.inf], np.nan)
+                pivot = pivot.sort_index(ascending=False)
+                show = pivot.reset_index()
+                show.insert(1, 'Week-Day', show['sort_val'].map(key_map))
+                show = show.drop(columns=['sort_val'])
+                pct_cols = [c for c in show.columns if isinstance(c, str) and '%' in c]
+                year_cols = [c for c in show.columns if c in years]
+
+                def _pct_bg(v, cap=50.0):
+                    if pd.isna(v):
+                        return ''
+                    intensity = min(abs(v), cap) / cap
+                    if v >= 0:
+                        r, g, b = int(255 - intensity * 127), int(255 - intensity * 56), int(255 - intensity * 127)
+                    else:
+                        r, g, b = int(255 - intensity * 23), int(255 - intensity * 127), int(255 - intensity * 127)
+                    return f'background-color: rgb({r},{g},{b})'
+
+                fmt_map = {'Week-Day': '{}'}
+                for c in year_cols:
+                    fmt_map[c] = lambda v, ff=fmt_fn: '' if pd.isna(v) else (ff % v)
+                for c in pct_cols:
+                    fmt_map[c] = lambda v: '' if pd.isna(v) else f'{v:+.1f}%'
+                styled = show.style.format(fmt_map).map(_pct_bg, subset=pct_cols)
+                st.markdown(f'### {metric_label}')
+                st.dataframe(styled, use_container_width=True, hide_index=True)
+
+            render_yoy_table_daily(daily, 'm1_vfm',        '💰 M1 VFM',        "$%.0f")
+            render_yoy_table_daily(daily, 'm1_vfm_per_uv', '💵 M1 VFM per UV', "$%.2f")
+            render_yoy_table_daily(daily, 'daily_uvs',     '👥 Distinct UVs',  "%.0f")
+
+            st.markdown("---")
+            st.markdown("### Trend chart")
+            metric_choice = st.radio(
+                "Metric", ["M1 VFM", "M1 VFM per UV", "Distinct UVs"], horizontal=True, key="yoy_metric_chart"
+            )
+            metric_map = {"M1 VFM": "m1_vfm", "M1 VFM per UV": "m1_vfm_per_uv", "Distinct UVs": "daily_uvs"}
+            mc = metric_map[metric_choice]
+            chart_df = daily[['iso_year', 'order_created_date', mc]].dropna(subset=[mc]).copy()
+            chart_df = chart_df[chart_df[mc] > 0].copy()
+            chart_df['iso_year_str'] = chart_df['iso_year'].astype(int).astype(str)
+            chart_df['day_of_year'] = chart_df['order_created_date'].dt.dayofyear
+            fig = px.line(
+                chart_df, x='day_of_year', y=mc, color='iso_year_str',
+                markers=False,
+                labels={'day_of_year': 'Day of Year', mc: metric_choice, 'iso_year_str': 'Year'},
+                title=f"{metric_choice} — {sel_country} / {'+'.join(sel_os)}"
+            )
+            fig.update_layout(height=380, margin=dict(l=0, r=0, t=40, b=10))
+            st.plotly_chart(fig, use_container_width=True)
+
+            st.markdown("---")
+            with st.expander("📋 Raw daily data"):
+                st.dataframe(daily, use_container_width=True, hide_index=True)
+                st.download_button(
+                    "📥 Download CSV", daily.to_csv(index=False),
+                    f"daily_yoy_{sel_country}_{'-'.join(sel_os)}.csv", "text/csv", key="yoy_dl"
+                )
 
 
 
