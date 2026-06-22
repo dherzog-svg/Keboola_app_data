@@ -231,10 +231,13 @@ def load_cohort_data():
     for col in numeric_cols:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+    if 'first_groupon_version' not in df.columns:
+        df['first_groupon_version'] = 'legacy'
+    df['first_groupon_version'] = df['first_groupon_version'].fillna('legacy')
     df['cohort_week'] = pd.to_datetime(df['cohort_week'])
     df = (df.sort_values('UV', ascending=False)
-            .drop_duplicates(subset=['country', 'cohort_week'], keep='first')
-            .sort_values(['country', 'cohort_week'])
+            .drop_duplicates(subset=['country', 'cohort_week', 'first_groupon_version'], keep='first')
+            .sort_values(['country', 'cohort_week', 'first_groupon_version'])
             .reset_index(drop=True))
     return df
 
@@ -395,7 +398,7 @@ with tab_yoy:
                 latest_year = int(years[-1]) if years else pd.Timestamp.now().year
                 def _iso_date(sv):
                     try:
-                        return _dt.date.fromisocalendar(latest_year, int(sv) // 10, int(sv) % 10 + 1).strftime('%Y-%m-%d')
+                        return _dt.date.fromisocalendar(latest_year, int(sv) // 10, int(sv) % 10 + 1).strftime('%b %d')
                     except Exception:
                         return ''
                 for i in range(1, len(years)):
@@ -477,7 +480,11 @@ with tab_yoy:
 # TAB 1 — COHORT ANALYSIS
 # =============================================================================
 with tab_cohort:
-    st.caption("New-user cohorts by first-visit week. Each metric shown across cumulative windows (Day 1 / 1–7 / 1–14 / 1–21 / 1–28). Mirrors the NA Android Local-Bucketing report layout, without the groupon_version split (no local bucketing on INTL).")
+    st.caption(
+        "Local-bucketing experiment cohorts — NEW users whose first locally-bucketed event "
+        "(isLocalBucketed = 'true') fell in each Start-Day week, split Legacy vs MBNXT with uplift "
+        "across cumulative windows (Day 1 / 1–7 / 1–14 / 1–21 / 1–28). Tester / ramp-scale population."
+    )
 
     if coh_df_raw.empty:
         st.warning("No cohort data available.")
@@ -488,137 +495,114 @@ with tab_cohort:
         if coh_df.empty:
             st.info(f"No cohort data for {sel_country_coh}.")
         else:
-            metric_options = {
-                'Orders': 'orders',
-                'Purchasers': 'purchasers',
-                'CVR (%)': 'cvr',
-                'NOB (USD)': 'nob',
-                'Gross Bookings (USD)': 'gross_bookings',
-                'M1 VFM (USD)': 'm1_vfm',
-                'M1 VFM / UV (USD)': 'm1_vfm_per_uv',
-                'AOV (NOB / order, USD)': 'aov',
-                'Avg M1 VFM / order (USD)': 'avg_m1_vfm',
-                'Deals (Quantity)': 'deals_all',
-                'New UVs (day_01 only)': 'UV',
+            window_labels = {
+                'day_01': 'Day 1', 'day_01_07': 'Day 1–7', 'day_01_14': 'Day 1–14',
+                'day_01_21': 'Day 1–21', 'day_01_28': 'Day 1–28',
+            }
+            # Window is only fully observable once today - cohort_week >= window length (+ UE T+1 lag).
+            window_min_days = {
+                'day_01': 1, 'day_01_07': 7, 'day_01_14': 14, 'day_01_21': 21, 'day_01_28': 28,
+            }
+            today_ts = pd.Timestamp.today().normalize()
+
+            # Per-window metric shown as Legacy / MBNXT / Uplift. M1 VFM / UV mirrors the NA sheet.
+            coh_metric_options = {
+                'M1 VFM / UV': ('m1_vfm_per_uv', '${:,.2f}'),
+                'M1 VFM':      ('m1_vfm',        '${:,.0f}'),
+                'Orders':      ('orders',        '{:,.0f}'),
+                'CVR (%)':     ('cvr',           '{:.2f}%'),
+                'AOV (USD)':   ('aov',           '${:,.2f}'),
             }
             sel_metric_label = st.selectbox(
-                "Metric", list(metric_options.keys()),
-                index=list(metric_options.keys()).index('Orders'),
-                key="coh_metric"
+                "Per-window metric", list(coh_metric_options.keys()), index=0, key="coh_metric"
+            )
+            mkey, fmt_str = coh_metric_options[sel_metric_label]
+
+            def cohort_metric(row, mkey, win):
+                # Value of `mkey` for one version-row in cumulative window `win`; None if missing / immature.
+                if row is None:
+                    return None
+                if (today_ts - row['cohort_week']).days < window_min_days[win]:
+                    return None
+                uv = row['UV']
+                if mkey == 'm1_vfm_per_uv':
+                    return (row[f'{win}_m1_vfm'] / uv) if uv > 0 else None
+                if mkey == 'cvr':
+                    return (row[f'{win}_purchasers'] / uv * 100) if uv > 0 else None
+                if mkey == 'aov':
+                    o = row[f'{win}_orders']
+                    return (row[f'{win}_nob'] / o) if o > 0 else None
+                return row.get(f'{win}_{mkey}')
+
+            # Pivot the two version rows (legacy / mbnxt) per cohort_week into side-by-side columns.
+            weeks = sorted(coh_df['cohort_week'].unique(), reverse=True)
+            uplift_cols = []
+            table_rows = []
+            for cw in weeks:
+                wk = coh_df[coh_df['cohort_week'] == cw]
+                leg = wk[wk['first_groupon_version'] == 'legacy']
+                mbx = wk[wk['first_groupon_version'] == 'mbnxt']
+                leg_row = leg.iloc[0] if not leg.empty else None
+                mbx_row = mbx.iloc[0] if not mbx.empty else None
+                uv_leg = int(leg_row['UV']) if leg_row is not None else 0
+                uv_mbx = int(mbx_row['UV']) if mbx_row is not None else 0
+                size = uv_leg + uv_mbx
+                _, iso_w, _ = pd.Timestamp(cw).isocalendar()
+                r = {
+                    'Start Day': f"W{iso_w} · {pd.Timestamp(cw).strftime('%Y-%m-%d')}",
+                    'Legacy UVs': uv_leg,
+                    'MBNXT UVs': uv_mbx,
+                    'MBNXT %': (uv_mbx / size * 100) if size > 0 else None,
+                }
+                for w in COHORT_WINDOWS:
+                    lab = window_labels[w]
+                    lv = cohort_metric(leg_row, mkey, w)
+                    mv = cohort_metric(mbx_row, mkey, w)
+                    up = ((mv / lv - 1) * 100) if (lv not in (None, 0) and mv is not None) else None
+                    r[f'{lab} Legacy'] = lv
+                    r[f'{lab} MBNXT'] = mv
+                    upcol = f'{lab} Uplift'
+                    r[upcol] = up
+                    if upcol not in uplift_cols:
+                        uplift_cols.append(upcol)
+                table_rows.append(r)
+
+            tbl = pd.DataFrame(table_rows)
+            st.markdown(f"#### {sel_country_coh} — {sel_metric_label} · Legacy vs MBNXT by cohort")
+
+            metric_cols = [c for c in tbl.columns if c.endswith(' Legacy') or c.endswith(' MBNXT')]
+            fmt_map = {c: (lambda v, f=fmt_str: '' if pd.isna(v) else f.format(v)) for c in metric_cols}
+            for c in uplift_cols:
+                fmt_map[c] = lambda v: '' if pd.isna(v) else f'{v:,.1f}%'
+            for c in ['Legacy UVs', 'MBNXT UVs']:
+                fmt_map[c] = lambda v: '' if pd.isna(v) else f'{v:,.0f}'
+            fmt_map['MBNXT %'] = lambda v: '' if pd.isna(v) else f'{v:,.1f}%'
+
+            up_subset = [c for c in uplift_cols if c in tbl.columns]
+            try:
+                styler = tbl.style.format(fmt_map)
+                if up_subset:
+                    styler = styler.background_gradient(cmap='Greens', subset=up_subset, axis=None)
+                styler = styler.background_gradient(cmap='Blues', subset=['MBNXT %'])
+                st.dataframe(styler, use_container_width=True, hide_index=True)
+            except Exception:
+                st.dataframe(tbl, use_container_width=True, hide_index=True)
+
+            st.caption(
+                "Uplift = MBNXT ÷ Legacy − 1 for the selected metric. Blank = window not yet matured "
+                "(today − Start Day < window length) or that version has no users in the cohort. "
+                "Cohort entry = first event with isLocalBucketed = 'true'."
             )
 
-            cdf = coh_df.copy().sort_values('cohort_week')
-
-            if cdf.empty:
-                st.info("No cohort data for the selected country.")
-            else:
-                window_labels = {
-                    'day_01': 'Day 1', 'day_01_07': 'Day 1–7', 'day_01_14': 'Day 1–14',
-                    'day_01_21': 'Day 1–21', 'day_01_28': 'Day 1–28',
-                }
-                # Min days that must have elapsed since cohort_week start for the window
-                # to be fully observable. UE has T+1 lag, so we need today - cohort_week >= window_days.
-                window_min_days = {
-                    'day_01': 1, 'day_01_07': 7, 'day_01_14': 14,
-                    'day_01_21': 21, 'day_01_28': 28,
-                }
-                today_ts = pd.Timestamp.today().normalize()
-                fmt_by_metric = {
-                    'orders': '{:,.0f}', 'purchasers': '{:,.0f}', 'deals_all': '{:,.0f}',
-                    'UV': '{:,.0f}',
-                    'cvr': '{:.2f}%',
-                    'nob': '${:,.0f}', 'gross_bookings': '${:,.0f}', 'm1_vfm': '${:,.0f}',
-                    'm1_vfm_per_uv': '${:,.4f}', 'aov': '${:,.2f}', 'avg_m1_vfm': '${:,.2f}',
-                }
-
-                def compute_metric(row, mkey, win):
-                    if mkey == 'UV':
-                        return row['UV']
-                    # Mask cells where the cumulative window has not fully matured
-                    if (today_ts - row['cohort_week']).days < window_min_days[win]:
-                        return None
-                    uv = row['UV']
-                    if mkey == 'cvr':
-                        p = row[f'{win}_purchasers']
-                        return (p / uv * 100) if uv > 0 else None
-                    if mkey == 'aov':
-                        o = row[f'{win}_orders']
-                        return (row[f'{win}_nob'] / o) if o > 0 else None
-                    if mkey == 'm1_vfm_per_uv':
-                        return (row[f'{win}_m1_vfm'] / uv) if uv > 0 else None
-                    if mkey == 'avg_m1_vfm':
-                        o = row[f'{win}_orders']
-                        return (row[f'{win}_m1_vfm'] / o) if o > 0 else None
-                    return row[f'{win}_{mkey}']
-
-                # --- Single formatted table for the selected metric (rows = cohort week, cols = windows) ---
-                mkey = metric_options[sel_metric_label]
-                rows = []
-                for _, row in cdf.iterrows():
-                    cw = row['cohort_week']
-                    _, iso_w, _ = cw.isocalendar()
-                    r = {'Cohort Week': f"W{iso_w} — {cw.strftime('%Y-%m-%d')}"}
-                    if mkey == 'UV':
-                        r['New UVs'] = row['UV']
-                    else:
-                        for w in COHORT_WINDOWS:
-                            r[window_labels[w]] = compute_metric(row, mkey, w)
-                    rows.append(r)
-                tbl = pd.DataFrame(rows)
-
-                st.markdown(f"#### {sel_country_coh} — {sel_metric_label}")
-                value_cols = [c for c in tbl.columns if c != 'Cohort Week']
-                fmt_str = fmt_by_metric.get(mkey, '{:,.2f}')
-                fmt_map = {c: (lambda v, f=fmt_str: '' if pd.isna(v) else f.format(v)) for c in value_cols}
-                try:
-                    styled = (tbl.style
-                              .format(fmt_map)
-                              .background_gradient(cmap='RdYlGn', subset=value_cols, axis=None))
-                    st.dataframe(styled, use_container_width=True, hide_index=True)
-                except Exception:
-                    st.dataframe(tbl, use_container_width=True, hide_index=True)
-
-                # --- Line chart of the same metric across cohort weeks, one line per window ---
-                pkey = mkey
-                primary_label = sel_metric_label
-                st.markdown("---")
-                st.markdown(f"### Trend across cohort weeks")
-                chart_rows = []
-                for _, row in cdf.iterrows():
-                    for w in COHORT_WINDOWS:
-                        if pkey == 'UV' and w != 'day_01':
-                            continue
-                        v = compute_metric(row, pkey, w)
-                        if v is None:
-                            continue
-                        chart_rows.append({
-                            'Cohort Week': row['cohort_week'],
-                            'Window': window_labels[w],
-                            'Value': v,
-                        })
-                if chart_rows:
-                    chart_df = pd.DataFrame(chart_rows)
-                    fig_coh = px.line(
-                        chart_df, x='Cohort Week', y='Value', color='Window', markers=True,
-                        labels={'Value': primary_label},
-                        color_discrete_map={
-                            'Day 1': '#1f77b4', 'Day 1–7': '#2196F3', 'Day 1–14': '#FF9800',
-                            'Day 1–21': '#9C27B0', 'Day 1–28': '#2ecc71',
-                        },
-                        title=f"{sel_country_coh} — {primary_label}",
-                    )
-                    fig_coh.update_layout(height=380, margin=dict(l=0, r=0, t=40, b=10))
-                    st.plotly_chart(fig_coh, use_container_width=True)
-
-                # --- Raw data + CSV ---
-                with st.expander("📋 Raw cohort data"):
-                    raw = cdf.copy()
-                    raw['cohort_week'] = raw['cohort_week'].dt.strftime('%Y-%m-%d')
-                    st.dataframe(raw, use_container_width=True, hide_index=True)
-                    st.download_button(
-                        "📥 Download CSV", raw.to_csv(index=False),
-                        f"cohort_{sel_country_coh}.csv", "text/csv", key="coh_dl"
-                    )
+            # --- Raw data + CSV ---
+            with st.expander("📋 Raw cohort data"):
+                raw = coh_df.copy()
+                raw['cohort_week'] = raw['cohort_week'].dt.strftime('%Y-%m-%d')
+                st.dataframe(raw, use_container_width=True, hide_index=True)
+                st.download_button(
+                    "📥 Download CSV", raw.to_csv(index=False),
+                    f"cohort_{sel_country_coh}.csv", "text/csv", key="coh_dl"
+                )
 
 
 # =============================================================================
