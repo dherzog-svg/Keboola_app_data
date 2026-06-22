@@ -312,6 +312,22 @@ with st.sidebar:
         label_visibility="collapsed", key="global_country",
     )
 
+    # Client Platform filter (iOS / Android) — shared across YoY + Cohort tabs
+    os_pool = set()
+    if not yoy_df_raw.empty and 'operating_system' in yoy_df_raw.columns:
+        os_pool |= set(yoy_df_raw['operating_system'].dropna().unique())
+    if not coh_df_raw.empty and 'operating_system' in coh_df_raw.columns:
+        os_pool |= set(coh_df_raw['operating_system'].dropna().unique())
+    os_opts_all = [o for o in ['iOS', 'Android'] if o in os_pool] or sorted(os_pool) or ['iOS']
+    default_os_sel = ['iOS'] if 'iOS' in os_opts_all else os_opts_all
+    st.markdown('<p class="section-label">Client Platform</p>', unsafe_allow_html=True)
+    selected_os = st.multiselect(
+        "Client Platform", os_opts_all, default=default_os_sel,
+        label_visibility="collapsed", key="global_os",
+    )
+    if not selected_os:
+        selected_os = os_opts_all
+
     if KAI_AVAILABLE and STORAGE_API_TOKEN:
         st.markdown("---")
         st.markdown('<p class="section-label">Kai AI</p>', unsafe_allow_html=True)
@@ -326,7 +342,7 @@ with st.sidebar:
 # PAGE HEADER
 # =============================================================================
 st.markdown("# 🌍 INTL APP Markets by countries")
-st.markdown("Sidebar holds the global Country filter — applies to both tabs. Tab-specific filters (OS, Metric) live inline next to the relevant table.")
+st.markdown("Sidebar holds the global Country + Client Platform filters — applied to both tabs. The Metric selector lives inline next to each table.")
 
 tab_yoy, tab_cohort, tab_kai, tab_docs = st.tabs([
     "📈 YoY Trends",
@@ -346,12 +362,10 @@ with tab_yoy:
         st.warning("Daily YoY tables not yet available — run the **INTL app YoY trends** transformation first (outputs: `daily_yoy_INTL_app`, `daily_uv_INTL_app`).")
     else:
         sel_country = selected_country
-        os_opts = sorted(yoy_df_raw['operating_system'].dropna().unique())
-        default_os = ['iOS'] if 'iOS' in os_opts else os_opts[:1]
-        sel_os = st.multiselect("OS", os_opts, default=default_os, key="yoy_os")
+        sel_os = selected_os
 
         if not sel_os:
-            st.warning("Pick at least one OS.")
+            st.warning("Pick at least one Client Platform in the sidebar.")
             st.stop()
 
         fin = yoy_df_raw[
@@ -453,10 +467,12 @@ with tab_yoy:
             )
             metric_map = {"M1 VFM": ("m1_vfm", fin_d), "M1 VFM per UV": ("m1_vfm_per_uv", muv), "Distinct UVs": ("daily_uvs", uv_d)}
             mc, chart_src = metric_map[metric_choice]
-            chart_df = chart_src[['iso_year', 'order_created_date', mc]].dropna(subset=[mc]).copy()
+            chart_df = chart_src[['iso_year', 'iso_week', 'order_created_date', mc]].dropna(subset=[mc]).copy()
             chart_df = chart_df[chart_df[mc] > 0].copy()
             chart_df['iso_year_str'] = chart_df['iso_year'].astype(int).astype(str)
-            chart_df['day_of_year'] = chart_df['order_created_date'].dt.dayofyear
+            # ISO-aligned day-of-year: ISO-week-1 dates that fall in late December belong to the next
+            # iso_year — using calendar dayofyear put them at ~day 365 and drew a straight line across.
+            chart_df['day_of_year'] = (chart_df['iso_week'].astype(int) - 1) * 7 + (chart_df['order_created_date'].dt.dayofweek + 1)
             fig = px.line(
                 chart_df, x='day_of_year', y=mc, color='iso_year_str',
                 markers=False,
@@ -491,6 +507,15 @@ with tab_cohort:
     else:
         sel_country_coh = selected_country
         coh_df = coh_df_raw[coh_df_raw['country'] == sel_country_coh].copy()
+
+        # Apply the sidebar Client Platform filter, then collapse OS into one row per (week, version).
+        if 'operating_system' in coh_df.columns:
+            coh_df = coh_df[coh_df['operating_system'].isin(selected_os)].copy()
+            _sum_cols = [c for c in (['UV'] + [f'{w}_{m}' for w in COHORT_WINDOWS for m in COHORT_BASE_METRICS]) if c in coh_df.columns]
+            if not coh_df.empty:
+                coh_df = coh_df.groupby(
+                    ['country', 'cohort_week', 'first_groupon_version'], as_index=False
+                )[_sum_cols].sum()
 
         if coh_df.empty:
             st.info(f"No cohort data for {sel_country_coh}.")
