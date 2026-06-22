@@ -534,9 +534,9 @@ with tab_cohort:
                     return (row[f'{win}_nob'] / o) if o > 0 else None
                 return row.get(f'{win}_{mkey}')
 
-            # Pivot the two version rows (legacy / mbnxt) per cohort_week into side-by-side columns.
+            # Pivot the two version rows into a two-level header (group row + Legacy/MBNXT/Uplift),
+            # matching the NA local-bucketing sheet so sub-labels stay short.
             weeks = sorted(coh_df['cohort_week'].unique(), reverse=True)
-            uplift_cols = []
             table_rows = []
             for cw in weeks:
                 wk = coh_df[coh_df['cohort_week'] == cw]
@@ -549,41 +549,51 @@ with tab_cohort:
                 size = uv_leg + uv_mbx
                 _, iso_w, _ = pd.Timestamp(cw).isocalendar()
                 r = {
-                    'Start Day': f"W{iso_w} · {pd.Timestamp(cw).strftime('%Y-%m-%d')}",
-                    'Legacy UVs': uv_leg,
-                    'MBNXT UVs': uv_mbx,
-                    'MBNXT %': (uv_mbx / size * 100) if size > 0 else None,
+                    ('', 'Start Day'): f"W{iso_w} · {pd.Timestamp(cw).strftime('%Y-%m-%d')}",
+                    ('Users in Cohort', 'Legacy'): uv_leg,
+                    ('Users in Cohort', 'MBNXT'): uv_mbx,
+                    ('Users in Cohort', 'MBNXT %'): (uv_mbx / size * 100) if size > 0 else None,
                 }
                 for w in COHORT_WINDOWS:
-                    lab = window_labels[w]
+                    grp = window_labels[w]
                     lv = cohort_metric(leg_row, mkey, w)
                     mv = cohort_metric(mbx_row, mkey, w)
                     up = ((mv / lv - 1) * 100) if (lv not in (None, 0) and mv is not None) else None
-                    r[f'{lab} Legacy'] = lv
-                    r[f'{lab} MBNXT'] = mv
-                    upcol = f'{lab} Uplift'
-                    r[upcol] = up
-                    if upcol not in uplift_cols:
-                        uplift_cols.append(upcol)
+                    r[(grp, 'Legacy')] = lv
+                    r[(grp, 'MBNXT')] = mv
+                    r[(grp, 'Uplift')] = up
                 table_rows.append(r)
 
             tbl = pd.DataFrame(table_rows)
+            tbl.columns = pd.MultiIndex.from_tuples(tbl.columns)
+
             st.markdown(f"#### {sel_country_coh} — {sel_metric_label} · Legacy vs MBNXT by cohort")
 
-            metric_cols = [c for c in tbl.columns if c.endswith(' Legacy') or c.endswith(' MBNXT')]
-            fmt_map = {c: (lambda v, f=fmt_str: '' if pd.isna(v) else f.format(v)) for c in metric_cols}
-            for c in uplift_cols:
-                fmt_map[c] = lambda v: '' if pd.isna(v) else f'{v:,.1f}%'
-            for c in ['Legacy UVs', 'MBNXT UVs']:
-                fmt_map[c] = lambda v: '' if pd.isna(v) else f'{v:,.0f}'
-            fmt_map['MBNXT %'] = lambda v: '' if pd.isna(v) else f'{v:,.1f}%'
+            pct_col = ('Users in Cohort', 'MBNXT %')
+            uv_cols = [('Users in Cohort', 'Legacy'), ('Users in Cohort', 'MBNXT')]
+            metric_cols = [c for c in tbl.columns if c[1] in ('Legacy', 'MBNXT') and c[0] != 'Users in Cohort']
+            uplift_cols = [c for c in tbl.columns if c[1] == 'Uplift']
 
-            up_subset = [c for c in uplift_cols if c in tbl.columns]
+            fmt_map = {c: fmt_str for c in metric_cols}
+            for c in uplift_cols:
+                fmt_map[c] = '{:,.1f}%'
+            for c in uv_cols:
+                fmt_map[c] = '{:,.0f}'
+            fmt_map[pct_col] = '{:,.1f}%'
+
+            # Only gradient columns that actually have values, else all-NaN renders as black cells.
+            grad_up = [c for c in uplift_cols if tbl[c].notna().any()]
+            grad_pct = [pct_col] if tbl[pct_col].notna().any() else []
             try:
-                styler = tbl.style.format(fmt_map)
-                if up_subset:
-                    styler = styler.background_gradient(cmap='Greens', subset=up_subset, axis=None)
-                styler = styler.background_gradient(cmap='Blues', subset=['MBNXT %'])
+                styler = tbl.style.format(fmt_map, na_rep='')
+                if grad_up:
+                    styler = styler.background_gradient(cmap='Greens', subset=grad_up, axis=None)
+                if grad_pct:
+                    styler = styler.background_gradient(cmap='Blues', subset=grad_pct)
+                try:
+                    styler = styler.highlight_null(color='white')
+                except Exception:
+                    pass
                 st.dataframe(styler, use_container_width=True, hide_index=True)
             except Exception:
                 st.dataframe(tbl, use_container_width=True, hide_index=True)
