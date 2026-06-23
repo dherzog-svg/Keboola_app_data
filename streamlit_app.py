@@ -431,6 +431,20 @@ with tab_yoy:
                 ('💵 M1 VFM per UV', _latest_summary(muv,   'm1_vfm_per_uv'), "${:,.2f}"),
                 ('👥 Distinct UVs',  _latest_summary(uv_d,  'daily_uvs'),     "{:,.0f}"),
             ]
+            # Delta pill styled to match Streamlit's native metric delta (red down / green up).
+            def _pill(v, suffix):
+                if v is None:
+                    return (f'<span style="display:inline-block;background:#f1f3f5;color:#868e96;'
+                            f'border-radius:8px;padding:1px 9px;font-size:0.82rem;font-weight:600;">'
+                            f'n/a {suffix}</span>')
+                up = v >= 0
+                arrow = '↑' if up else '↓'
+                color = '#1a9e4b' if up else '#d6453f'
+                bg = 'rgba(33,195,84,0.12)' if up else 'rgba(255,75,75,0.12)'
+                return (f'<span style="display:inline-block;background:{bg};color:{color};'
+                        f'border-radius:8px;padding:1px 9px;font-size:0.82rem;font-weight:600;">'
+                        f'{arrow} {v:+.1f}% {suffix}</span>')
+
             st.markdown(f"#### 📌 Latest day at a glance — {sel_country} / {'+'.join(sel_os)}")
             _scols = st.columns(3)
             for _box, (_lbl, _s, _fmt) in zip(_scols, _summ):
@@ -438,12 +452,14 @@ with tab_yoy:
                     if not _s:
                         st.metric(_lbl, "—")
                         continue
-                    _delta = None if _s['yoy'] is None else f"{_s['yoy']:+.1f}% YoY"
-                    st.metric(_lbl, _fmt.format(_s['value']), _delta)
-                    _dod = "n/a" if _s['dod'] is None else f"{_s['dod']:+.1f}%"
-                    _wow = "n/a" if _s['wow'] is None else f"{_s['wow']:+.1f}%"
-                    st.caption(f"{_s['date'].strftime('%a %b %d')}  ·  DoD {_dod}  ·  WoW {_wow}")
-            st.caption("Headline delta = YoY (same ISO week + weekday, prior year). Full history in the tables below.")
+                    st.metric(_lbl, _fmt.format(_s['value']))
+                    _pills = ''.join(
+                        f'<div style="margin-bottom:5px;">{_pill(_v, _sfx)}</div>'
+                        for _v, _sfx in [(_s['yoy'], 'YoY'), (_s['wow'], 'WoW'), (_s['dod'], 'DoD')]
+                    )
+                    st.markdown(_pills, unsafe_allow_html=True)
+                    st.caption(_s['date'].strftime('%a %b %d'))
+            st.caption("Deltas: YoY (same ISO week + weekday, prior year) · WoW (prior week, same weekday) · DoD (prior day). Full history in the tables below.")
             st.markdown("---")
 
             def render_yoy_table_daily(df, metric_col, metric_label, fmt_fn):
