@@ -396,6 +396,56 @@ with tab_yoy:
             )
             muv['m1_vfm_per_uv'] = muv['m1_vfm'] / muv['daily_uvs'].replace(0, np.nan)
 
+            # --- Quick summary: latest available day, all 3 metrics in one place ---
+            # Same ISO-week × weekday logic as the tables below, so deltas match exactly.
+            def _latest_summary(df, metric_col):
+                import datetime as _dt
+                d = df[['iso_year', 'iso_week', 'order_created_date', metric_col]].dropna(subset=[metric_col]).copy()
+                d = d[d[metric_col] > 0]
+                if d.empty:
+                    return None
+                d['sort_val'] = d['iso_week'].astype(int) * 10 + d['order_created_date'].dt.dayofweek
+                years = sorted(d['iso_year'].astype(int).unique())
+                latest_year = years[-1]
+                cur = d[d['iso_year'] == latest_year].groupby('sort_val')[metric_col].sum().sort_index()
+                if cur.empty:
+                    return None
+                sv = int(cur.index[-1])
+                val = float(cur.iloc[-1])
+                try:
+                    when = _dt.date.fromisocalendar(latest_year, sv // 10, sv % 10 + 1)
+                except Exception:
+                    when = d[d['sort_val'] == sv]['order_created_date'].max().date()
+                dod = (val / cur.iloc[-2] - 1) * 100 if len(cur) >= 2 and cur.iloc[-2] else None
+                wow_prev = cur.get(sv - 10)
+                wow = (val / wow_prev - 1) * 100 if wow_prev else None
+                yoy = None
+                if (latest_year - 1) in years:
+                    prior = d[d['iso_year'] == latest_year - 1].groupby('sort_val')[metric_col].sum()
+                    pv = prior.get(sv)
+                    yoy = (val / pv - 1) * 100 if pv else None
+                return {'date': when, 'value': val, 'yoy': yoy, 'dod': dod, 'wow': wow}
+
+            _summ = [
+                ('💰 M1 VFM',        _latest_summary(fin_d, 'm1_vfm'),        "${:,.0f}"),
+                ('💵 M1 VFM per UV', _latest_summary(muv,   'm1_vfm_per_uv'), "${:,.2f}"),
+                ('👥 Distinct UVs',  _latest_summary(uv_d,  'daily_uvs'),     "{:,.0f}"),
+            ]
+            st.markdown(f"#### 📌 Latest day at a glance — {sel_country} / {'+'.join(sel_os)}")
+            _scols = st.columns(3)
+            for _box, (_lbl, _s, _fmt) in zip(_scols, _summ):
+                with _box:
+                    if not _s:
+                        st.metric(_lbl, "—")
+                        continue
+                    _delta = None if _s['yoy'] is None else f"{_s['yoy']:+.1f}% YoY"
+                    st.metric(_lbl, _fmt.format(_s['value']), _delta)
+                    _dod = "n/a" if _s['dod'] is None else f"{_s['dod']:+.1f}%"
+                    _wow = "n/a" if _s['wow'] is None else f"{_s['wow']:+.1f}%"
+                    st.caption(f"{_s['date'].strftime('%a %b %d')}  ·  DoD {_dod}  ·  WoW {_wow}")
+            st.caption("Headline delta = YoY (same ISO week + weekday, prior year). Full history in the tables below.")
+            st.markdown("---")
+
             def render_yoy_table_daily(df, metric_col, metric_label, fmt_fn):
                 import datetime as _dt
                 df = df[['order_created_date', 'iso_year', 'iso_week', metric_col]].copy()
