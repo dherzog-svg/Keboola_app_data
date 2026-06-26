@@ -236,7 +236,7 @@ def load_cohort_data():
     df['first_groupon_version'] = df['first_groupon_version'].fillna('legacy')
     df['cohort_week'] = pd.to_datetime(df['cohort_week'])
     df = (df.sort_values('UV', ascending=False)
-            .drop_duplicates(subset=['country', 'cohort_week', 'first_groupon_version'], keep='first')
+            .drop_duplicates(subset=['country', 'cohort_week', 'first_groupon_version', 'operating_system'], keep='first')
             .sort_values(['country', 'cohort_week', 'first_groupon_version'])
             .reset_index(drop=True))
     return df
