@@ -583,9 +583,9 @@ with tab_yoy:
 # =============================================================================
 with tab_cohort:
     st.caption(
-        "Local-bucketing experiment cohorts — NEW users whose first locally-bucketed event "
-        "(isLocalBucketed = 'true') fell in each Start-Day week, split Legacy vs MBNXT with uplift "
-        "across cumulative windows (Day 1 / 1–7 / 1–14 / 1–21 / 1–28). Tester / ramp-scale population."
+        "MBNXT vs Legacy cohorts — ALL active users (new + existing) whose first event on the new "
+        "build (appVersion 26.10+) fell in each Start-Day week, split Legacy vs MBNXT with uplift "
+        "across cumulative windows (Day 1 / 1–7 / 1–14 / 1–21 / 1–28). Local bucketing assigns ~50:50 within 26.10."
     )
 
     if coh_df_raw.empty:
@@ -712,7 +712,7 @@ with tab_cohort:
             st.caption(
                 "Uplift = MBNXT ÷ Legacy − 1 for the selected metric. Blank = window not yet matured "
                 "(today − Start Day < window length) or that version has no users in the cohort. "
-                "Cohort entry = first event with isLocalBucketed = 'true'."
+                "Cohort entry = first event on the new build (appVersion 26.10+); arm = grouponversion."
             )
 
             # --- Raw data + CSV ---
@@ -907,19 +907,21 @@ with tab_docs:
 
     st.markdown("---")
 
-    st.markdown("### ⚠️ Important: no MBNXT vs Legacy comparison on INTL")
+    st.markdown("### MBNXT vs Legacy via local bucketing (26.10+)")
     st.markdown(
         """
-The INTL ramp-up does **not** use local bucketing, so there is **no clean MBNXT-vs-Legacy comparison
-available** on INTL traffic.
+The INTL ramp **does** use local bucketing (launched 25 Jun 2026), so a clean **MBNXT-vs-Legacy comparison is
+available** on the new app build (appVersion 26.10+).
 
-- A single-version filter ("show me MBNXT users' trend over time") is fine — it's a directional read of one cohort.
-- A **side-by-side comparison** ("MBNXT users had X% higher CVR than Legacy users") is **not defensible** — it suffers
-  from *second-launch bias*: a user bucketed as MBNXT can still purchase on the Legacy app on their first session,
-  so purchases get attributed to the wrong bucket.
+- Bucketing assigns users ~**50:50** to MBNXT vs Legacy at hash level — a randomised A/B, so a side-by-side
+  comparison (CVR, M1 VFM/UV, etc.) is defensible.
+- Cohort entry = a user's **first event on 26.10+**, and metrics are measured **forward** from there, so there is no
+  *second-launch bias* (no pre-bucketing purchases are attributed).
+- The Cohort tab uses **all active users** on 26.10 (new + existing), not new-users-only: Android new-install volume
+  is too low to read, and on iOS the app update mints fresh bcookies so "new users" are unreliable. All-users gives
+  bigger, artifact-free samples.
 
-This was a deliberate decision for the INTL ramp, not a tracking gap. Per-batch measurement is **before-vs-after
-trend monitoring**, not MBNXT-vs-Legacy.
+⚠️ Read small per-platform cells with care — Android cohorts are still low-volume (tens of orders).
 """
     )
 
@@ -968,11 +970,12 @@ Color scale: green positive, red negative (scale ±30%).
     st.markdown("### 🔄 Cohort Analysis tab")
     st.markdown(
         """
-**Purpose.** New-user cohorts by first-visit week. Mirrors the NA Android Local-Bucketing report layout,
-without the groupon_version split (see "no MBNXT vs Legacy" note above).
+**Purpose.** MBNXT vs Legacy cohorts on the new build (26.10+), by Start-Day week, split by groupon_version
+(see the local-bucketing note above).
 
-**Cohort definition.** A "cohort" is the set of bcookies whose `first_event_date` falls in a given ISO week.
-Source: `out_c_00_new_bcookie_identifier.bcookie_first_event_date`.
+**Cohort definition.** A "cohort" is the set of **all active users** (new + existing) whose **first event on
+appVersion 26.10+** falls in a given ISO week, bucketed by the Monday of that first event. Arm = `grouponversion`
+(mbnxt / legacy) at that first event. Source: `ext_bucket_janus.junoHourly_analytics` (cohort entry) + `unit_economics`.
 
 **Inline filters.**
 
