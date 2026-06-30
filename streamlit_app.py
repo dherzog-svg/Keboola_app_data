@@ -287,6 +287,21 @@ def load_uv_split_data():
     return df
 
 
+@st.cache_data(ttl=300)
+def load_appversion_data():
+    df = query_data('''
+    SELECT
+      `event_date`, `country_code`, `operating_system`, `app_version`,
+      SUM(`uv`) AS uv
+    FROM `kbc-grpn-40-0cd2`.`out_c_testing_data_apps`.`daily_appversion_split`
+    WHERE `groupon_version` = 'mbnxt'
+    GROUP BY 1, 2, 3, 4
+    ''')
+    df['uv'] = pd.to_numeric(df.get('uv', 0), errors='coerce').fillna(0)
+    df['event_date'] = pd.to_datetime(df['event_date'])
+    return df
+
+
 # =============================================================================
 # LOAD DATA
 # =============================================================================
@@ -309,6 +324,11 @@ try:
     uv_split_raw = load_uv_split_data()
 except Exception:
     uv_split_raw = pd.DataFrame()
+
+try:
+    appver_raw = load_appversion_data()
+except Exception:
+    appver_raw = pd.DataFrame()
 
 
 # =============================================================================
@@ -363,10 +383,87 @@ with st.sidebar:
 st.markdown("# 🌍 INTL APP Markets by countries")
 st.markdown("Sidebar holds the global Country + Client Platform filters — applied to both tabs. The Metric selector lives inline next to each table.")
 
-tab_yoy, tab_cohort, tab_split, tab_kai, tab_docs = st.tabs([
+def render_split_section(scope_df, label):
+    """MBNXT vs Legacy share of app UV (from daily_uv_split)."""
+    if scope_df.empty:
+        st.info(f"No traffic-split data for {label}.")
+        return
+    daily = scope_df.groupby(['event_date', 'groupon_version'], as_index=False)['uv'].sum()
+    pivot = daily.pivot(index='event_date', columns='groupon_version', values='uv').fillna(0.0)
+    for v in ['legacy', 'mbnxt']:
+        if v not in pivot.columns:
+            pivot[v] = 0.0
+    pivot = pivot.sort_index()
+    total = (pivot['legacy'] + pivot['mbnxt']).replace(0, np.nan)
+    pivot['legacy %'] = pivot['legacy'] / total * 100
+    pivot['mbnxt %'] = pivot['mbnxt'] / total * 100
+
+    cdf = pivot.reset_index().melt(
+        id_vars='event_date', value_vars=['legacy %', 'mbnxt %'],
+        var_name='Treatment', value_name='pct'
+    )
+    cdf['Treatment'] = cdf['Treatment'].str.replace(' %', '', regex=False)
+    fig = px.line(
+        cdf.dropna(subset=['pct']), x='event_date', y='pct', color='Treatment', markers=True,
+        color_discrete_map={'legacy': '#1f77b4', 'mbnxt': '#ff7f0e'},
+        labels={'pct': '% of Total UV', 'event_date': 'Day of Event Date'},
+    )
+    fig.update_layout(
+        height=340, margin=dict(l=0, r=0, t=10, b=0),
+        yaxis=dict(range=[0, 100], ticksuffix='%'), legend_title_text='Treatment',
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+    tbl = pivot.reset_index()[['event_date', 'legacy', 'mbnxt', 'mbnxt %']].sort_values(
+        'event_date', ascending=False
+    ).copy()
+    tbl['event_date'] = tbl['event_date'].dt.strftime('%Y-%m-%d')
+    tbl = tbl.rename(columns={'event_date': 'Day of Event Date'})
+    styled = tbl.style.format({'legacy': '{:,.0f}', 'mbnxt': '{:,.0f}', 'mbnxt %': '{:.2f}%'})
+    st.dataframe(styled, use_container_width=True, hide_index=True, height=320)
+
+
+def render_appversion_section(scope_df, label, top_n=15):
+    """100%-stacked area of MBNXT UV share by app_version over time (from daily_appversion_split)."""
+    if scope_df is None or scope_df.empty:
+        st.info(f"No app-version data for {label} yet.")
+        return
+    daily = scope_df.groupby(['event_date', 'app_version'], as_index=False)['uv'].sum()
+    totals = daily.groupby('app_version')['uv'].sum().sort_values(ascending=False)
+    keep = set(totals.head(top_n).index)
+    daily['version'] = daily['app_version'].where(daily['app_version'].isin(keep), 'Other')
+    daily = daily.groupby(['event_date', 'version'], as_index=False)['uv'].sum()
+    day_tot = daily.groupby('event_date')['uv'].transform('sum')
+    daily['pct'] = daily['uv'] / day_tot.replace(0, np.nan) * 100
+    has_other = bool((daily['version'] == 'Other').any())
+    order = sorted([v for v in daily['version'].unique() if v != 'Other']) + (['Other'] if has_other else [])
+
+    fig = px.area(
+        daily.sort_values('event_date'), x='event_date', y='pct', color='version',
+        category_orders={'version': order},
+        labels={'pct': '% of Total UV', 'event_date': 'Day of Event Date', 'version': 'App Version'},
+    )
+    fig.update_layout(
+        height=460, margin=dict(l=0, r=0, t=10, b=0),
+        yaxis=dict(range=[0, 100], ticksuffix='%'), legend_title_text='App Version',
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+    latest = daily['event_date'].max()
+    lt = daily[daily['event_date'] == latest].sort_values('uv', ascending=False)[['version', 'uv', 'pct']].copy()
+    lt = lt.rename(columns={'version': 'App Version', 'uv': 'UV', 'pct': '% of day'})
+    st.caption(f"Latest day: {latest.strftime('%Y-%m-%d')} · top {top_n} builds shown, rest grouped as 'Other'.")
+    st.dataframe(
+        lt.style.format({'UV': '{:,.0f}', '% of day': '{:.1f}%'}),
+        use_container_width=True, hide_index=True, height=300,
+    )
+
+
+tab_yoy, tab_cohort, tab_split, tab_split_us, tab_kai, tab_docs = st.tabs([
     "📈 YoY Trends",
     "🔄 Cohort Analysis",
     "🔀 Traffic Split",
+    "🇺🇸 Traffic Split — US",
     "🤖 Ask Kai",
     "📚 Docs"
 ])
@@ -730,60 +827,19 @@ with tab_cohort:
 # TAB — TRAFFIC SPLIT (MBNXT vs Legacy share of app UV)
 # =============================================================================
 with tab_split:
-    st.caption("MBNXT vs Legacy share of **app** UV (distinct bcookies), from MSA S2. Tracks the app ramp. "
-               "Total UV per day = legacy + mbnxt within the selected filters.")
+    st.caption("INTL app traffic. **Top:** MBNXT vs Legacy share of app UV (from MSA S2). "
+               "**Bottom:** MBNXT app-version mix. Sidebar Country + Client Platform filters apply.")
+    sel_os_split = selected_os or os_opts_all
 
+    # ---- MBNXT vs Legacy share (INTL, last 7 days) ----
+    st.markdown(f"### 🔀 MBNXT vs Legacy — {selected_country} · {'+'.join(sel_os_split)}")
     if uv_split_raw.empty:
         st.warning("Traffic split table not yet available — run the **INTL+US app traffic split (S2 UV)** "
                    "transformation (output: `daily_uv_split`).")
     else:
-        sel_os_split = selected_os or os_opts_all
-
-        def render_split_section(scope_df, label):
-            if scope_df.empty:
-                st.info(f"No data for {label} / {'+'.join(sel_os_split)}.")
-                return
-            daily = scope_df.groupby(['event_date', 'groupon_version'], as_index=False)['uv'].sum()
-            pivot = daily.pivot(index='event_date', columns='groupon_version', values='uv').fillna(0.0)
-            for v in ['legacy', 'mbnxt']:
-                if v not in pivot.columns:
-                    pivot[v] = 0.0
-            pivot = pivot.sort_index()
-            total = (pivot['legacy'] + pivot['mbnxt']).replace(0, np.nan)
-            pivot['legacy %'] = pivot['legacy'] / total * 100
-            pivot['mbnxt %'] = pivot['mbnxt'] / total * 100
-
-            # --- Line chart: % of total UV, legacy vs mbnxt ---
-            cdf = pivot.reset_index().melt(
-                id_vars='event_date', value_vars=['legacy %', 'mbnxt %'],
-                var_name='Treatment', value_name='pct'
-            )
-            cdf['Treatment'] = cdf['Treatment'].str.replace(' %', '', regex=False)
-            fig = px.line(
-                cdf.dropna(subset=['pct']), x='event_date', y='pct', color='Treatment', markers=True,
-                color_discrete_map={'legacy': '#1f77b4', 'mbnxt': '#ff7f0e'},
-                labels={'pct': '% of Total UV', 'event_date': 'Day of Event Date'},
-            )
-            fig.update_layout(
-                height=340, margin=dict(l=0, r=0, t=10, b=0),
-                yaxis=dict(range=[0, 100], ticksuffix='%'), legend_title_text='Treatment',
-            )
-            st.plotly_chart(fig, use_container_width=True)
-
-            # --- Daily counts table (most recent first) ---
-            tbl = pivot.reset_index()[['event_date', 'legacy', 'mbnxt', 'mbnxt %']].sort_values(
-                'event_date', ascending=False
-            ).copy()
-            tbl['event_date'] = tbl['event_date'].dt.strftime('%Y-%m-%d')
-            tbl = tbl.rename(columns={'event_date': 'Day of Event Date'})
-            styled = tbl.style.format({'legacy': '{:,.0f}', 'mbnxt': '{:,.0f}', 'mbnxt %': '{:.2f}%'})
-            st.dataframe(styled, use_container_width=True, hide_index=True, height=320)
-
-        # ---- Section A: INTL (sidebar Country filter, last 7 days) ----
+        st.caption("Last 7 days. % of total app UV.")
         max_date = uv_split_raw['event_date'].max()
         cutoff_7d = max_date - pd.Timedelta(days=6)
-        st.markdown(f"### 🌍 INTL — {selected_country} · {'+'.join(sel_os_split)}")
-        st.caption("Last 7 days. Country + Client Platform filters (sidebar) apply.")
         intl_df = uv_split_raw[
             (uv_split_raw['country_code'] == selected_country) &
             (uv_split_raw['operating_system'].isin(sel_os_split)) &
@@ -791,16 +847,54 @@ with tab_split:
         ]
         render_split_section(intl_df, f"INTL / {selected_country}")
 
-        st.markdown("---")
+    st.markdown("---")
 
-        # ---- Section B: US (fixed, from 2026-04-01) ----
-        st.markdown(f"### 🇺🇸 US — {'+'.join(sel_os_split)}")
-        st.caption("US app ramp since 2026-04-01. Country filter does not apply here; Client Platform does.")
+    # ---- App-version mix (INTL) ----
+    st.markdown(f"### 📲 App Version Mix — {selected_country} · {'+'.join(sel_os_split)}")
+    if appver_raw.empty:
+        st.warning("App-version table not yet available — run the **INTL+US app traffic split by app version** "
+                   "transformation (output: `daily_appversion_split`).")
+    else:
+        st.caption("MBNXT app builds as % of daily MBNXT UV. INTL markets get MBNXT from the June launch (build 26.10).")
+        intl_av = appver_raw[
+            (appver_raw['country_code'] == selected_country) &
+            (appver_raw['operating_system'].isin(sel_os_split))
+        ]
+        render_appversion_section(intl_av, f"INTL / {selected_country}")
+
+
+with tab_split_us:
+    st.caption("US app traffic. **Top:** MBNXT vs Legacy share of app UV (from MSA S2). "
+               "**Bottom:** MBNXT app-version mix. Fixed to US — the Country filter does not apply; Client Platform does.")
+    sel_os_split = selected_os or os_opts_all
+
+    # ---- MBNXT vs Legacy share (US) ----
+    st.markdown(f"### 🔀 MBNXT vs Legacy — US · {'+'.join(sel_os_split)}")
+    if uv_split_raw.empty:
+        st.warning("Traffic split table not yet available — run the **INTL+US app traffic split (S2 UV)** "
+                   "transformation (output: `daily_uv_split`).")
+    else:
+        st.caption("US app ramp since 2026-04-01.")
         us_df = uv_split_raw[
             (uv_split_raw['country_code'] == 'US') &
             (uv_split_raw['operating_system'].isin(sel_os_split))
         ]
         render_split_section(us_df, "US")
+
+    st.markdown("---")
+
+    # ---- App-version mix (US) ----
+    st.markdown(f"### 📲 App Version Mix — US · {'+'.join(sel_os_split)}")
+    if appver_raw.empty:
+        st.warning("App-version table not yet available — run the **INTL+US app traffic split by app version** "
+                   "transformation (output: `daily_appversion_split`).")
+    else:
+        st.caption("US MBNXT app builds as % of daily MBNXT UV — the version migration waves.")
+        us_av = appver_raw[
+            (appver_raw['country_code'] == 'US') &
+            (appver_raw['operating_system'].isin(sel_os_split))
+        ]
+        render_appversion_section(us_av, "US")
 
 
 # =============================================================================
