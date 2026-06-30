@@ -470,15 +470,20 @@ def render_appversion_section(scope_df, label, selected_versions=None, min_day_u
         category_orders={'version': order}, custom_data=['uv'],
         labels={'pct': '% of Total UV', 'event_date': 'Day of Event Date', 'version': 'App Version'},
     )
-    # Hover anywhere in the band (not just on the line), Tableau-style.
+    # Scrub across dates: one unified tooltip per date (the date is the tooltip header),
+    # listing each build's rollout share. Trim to builds that reach >=2% to keep it readable.
     fig.update_traces(
-        hoveron='points+fills',
-        hovertemplate='<b>%{fullData.name}</b><br>%{x|%b %d, %Y} · %{y:.1f}%<br>%{customdata[0]:,.0f} UV<extra></extra>',
+        hovertemplate='%{fullData.name}: %{y:.1f}%  ·  %{customdata[0]:,.0f} UV<extra></extra>',
     )
+    _sig = set(plot.groupby('version')['pct'].max().loc[lambda s: s >= 2.0].index)
+    for _tr in fig.data:
+        if _tr.name not in _sig:
+            _tr.hoverinfo = 'skip'
+            _tr.hovertemplate = None
     fig.update_layout(
         height=460, margin=dict(l=0, r=0, t=10, b=0),
         yaxis=dict(range=[0, 100], ticksuffix='%'), legend_title_text='App Version',
-        hovermode='closest',
+        hovermode='x unified',
     )
     st.plotly_chart(fig, use_container_width=True)
 
