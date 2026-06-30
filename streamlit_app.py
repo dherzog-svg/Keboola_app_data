@@ -455,8 +455,9 @@ def render_appversion_section(scope_df, label, selected_versions=None, min_day_u
         plot = daily.copy()
         note = f"All builds · days <{min_day_uv} MBNXT UV hidden."
 
-    # Stack versions in first-appearance order (newer builds ride on top → migration-wave look).
-    appear = daily.groupby('version')['event_date'].min().sort_values()
+    # Stack newest builds at the BOTTOM: a new version enters at the bottom, grows up to take over,
+    # and older builds get pushed up and out the top (first-appearance order, newest first).
+    appear = daily.groupby('version')['event_date'].min().sort_values(ascending=False)
     order = [v for v in appear.index.tolist() if v in set(plot['version'])]
     # Densify: every date × version present, missing filled with 0, so px.area stacks continuously to 100%.
     dates = sorted(plot['event_date'].unique())
