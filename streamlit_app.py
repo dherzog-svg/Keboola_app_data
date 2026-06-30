@@ -467,12 +467,18 @@ def render_appversion_section(scope_df, label, selected_versions=None, min_day_u
 
     fig = px.area(
         plot, x='event_date', y='pct', color='version',
-        category_orders={'version': order},
+        category_orders={'version': order}, custom_data=['uv'],
         labels={'pct': '% of Total UV', 'event_date': 'Day of Event Date', 'version': 'App Version'},
+    )
+    # Hover anywhere in the band (not just on the line), Tableau-style.
+    fig.update_traces(
+        hoveron='points+fills',
+        hovertemplate='<b>%{fullData.name}</b><br>%{x|%b %d, %Y} · %{y:.1f}%<br>%{customdata[0]:,.0f} UV<extra></extra>',
     )
     fig.update_layout(
         height=460, margin=dict(l=0, r=0, t=10, b=0),
         yaxis=dict(range=[0, 100], ticksuffix='%'), legend_title_text='App Version',
+        hovermode='closest',
     )
     st.plotly_chart(fig, use_container_width=True)
 
