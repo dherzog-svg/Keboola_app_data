@@ -423,23 +423,37 @@ def render_split_section(scope_df, label):
     st.dataframe(styled, use_container_width=True, hide_index=True, height=320)
 
 
-def render_appversion_section(scope_df, label, top_n=15):
-    """100%-stacked area of MBNXT UV share by app_version over time (from daily_appversion_split)."""
+def render_appversion_section(scope_df, label, selected_versions=None, top_n=15):
+    """Area chart of MBNXT UV share by app_version over time (from daily_appversion_split).
+    selected_versions=None → all builds, top-N + 'Other', 100%-stacked.
+    selected_versions=[...] → only those builds, each shown as its true % of the day's MBNXT UV."""
     if scope_df is None or scope_df.empty:
         st.info(f"No app-version data for {label} yet.")
         return
     daily = scope_df.groupby(['event_date', 'app_version'], as_index=False)['uv'].sum()
-    totals = daily.groupby('app_version')['uv'].sum().sort_values(ascending=False)
-    keep = set(totals.head(top_n).index)
-    daily['version'] = daily['app_version'].where(daily['app_version'].isin(keep), 'Other')
-    daily = daily.groupby(['event_date', 'version'], as_index=False)['uv'].sum()
-    day_tot = daily.groupby('event_date')['uv'].transform('sum')
-    daily['pct'] = daily['uv'] / day_tot.replace(0, np.nan) * 100
-    has_other = bool((daily['version'] == 'Other').any())
-    order = sorted([v for v in daily['version'].unique() if v != 'Other']) + (['Other'] if has_other else [])
+    # Always normalise against each day's FULL MBNXT UV (all versions) so a subset keeps its true share.
+    day_tot_all = daily.groupby('event_date')['uv'].transform('sum')
+    daily['pct'] = daily['uv'] / day_tot_all.replace(0, np.nan) * 100
+
+    if selected_versions:
+        plot = daily[daily['app_version'].isin(selected_versions)].copy()
+        if plot.empty:
+            st.info("No data for the selected app version(s) in this range.")
+            return
+        plot = plot.rename(columns={'app_version': 'version'})
+        order = sorted(plot['version'].unique())
+        note = f"{len(selected_versions)} build(s) selected · each shown as % of the day's MBNXT UV."
+    else:
+        totals = daily.groupby('app_version')['uv'].sum().sort_values(ascending=False)
+        keep = set(totals.head(top_n).index)
+        daily['version'] = daily['app_version'].where(daily['app_version'].isin(keep), 'Other')
+        plot = daily.groupby(['event_date', 'version'], as_index=False).agg(uv=('uv', 'sum'), pct=('pct', 'sum'))
+        has_other = bool((plot['version'] == 'Other').any())
+        order = sorted([v for v in plot['version'].unique() if v != 'Other']) + (['Other'] if has_other else [])
+        note = f"All builds · top {top_n} shown, rest grouped as 'Other'."
 
     fig = px.area(
-        daily.sort_values('event_date'), x='event_date', y='pct', color='version',
+        plot.sort_values('event_date'), x='event_date', y='pct', color='version',
         category_orders={'version': order},
         labels={'pct': '% of Total UV', 'event_date': 'Day of Event Date', 'version': 'App Version'},
     )
@@ -449,10 +463,10 @@ def render_appversion_section(scope_df, label, top_n=15):
     )
     st.plotly_chart(fig, use_container_width=True)
 
-    latest = daily['event_date'].max()
-    lt = daily[daily['event_date'] == latest].sort_values('uv', ascending=False)[['version', 'uv', 'pct']].copy()
+    latest = plot['event_date'].max()
+    lt = plot[plot['event_date'] == latest].sort_values('uv', ascending=False)[['version', 'uv', 'pct']].copy()
     lt = lt.rename(columns={'version': 'App Version', 'uv': 'UV', 'pct': '% of day'})
-    st.caption(f"Latest day: {latest.strftime('%Y-%m-%d')} · top {top_n} builds shown, rest grouped as 'Other'.")
+    st.caption(f"Latest day: {latest.strftime('%Y-%m-%d')} · {note}")
     st.dataframe(
         lt.style.format({'UV': '{:,.0f}', '% of day': '{:.1f}%'}),
         use_container_width=True, hide_index=True, height=300,
@@ -884,7 +898,10 @@ with tab_split:
                    "transformation (output: `daily_appversion_split`).")
     else:
         st.caption("MBNXT app builds as % of daily MBNXT UV. INTL markets get MBNXT from the June launch (build 26.10).")
-        render_appversion_section(intl_av, f"INTL / {selected_country}")
+        _av_opts = sorted(intl_av['app_version'].dropna().unique().tolist()) if not intl_av.empty else []
+        _picked = st.multiselect("App version", options=['All'] + _av_opts, default=['All'], key="av_intl")
+        _sel_v = None if ('All' in _picked or not _picked) else _picked
+        render_appversion_section(intl_av, f"INTL / {selected_country}", selected_versions=_sel_v)
 
 
 with tab_split_us:
@@ -926,7 +943,10 @@ with tab_split_us:
                    "transformation (output: `daily_appversion_split`).")
     else:
         st.caption("US MBNXT app builds as % of daily MBNXT UV — the version migration waves.")
-        render_appversion_section(us_av, "US")
+        _av_opts_us = sorted(us_av['app_version'].dropna().unique().tolist()) if not us_av.empty else []
+        _picked_us = st.multiselect("App version", options=['All'] + _av_opts_us, default=['All'], key="av_us")
+        _sel_v_us = None if ('All' in _picked_us or not _picked_us) else _picked_us
+        render_appversion_section(us_av, "US", selected_versions=_sel_v_us)
 
 
 # =============================================================================
