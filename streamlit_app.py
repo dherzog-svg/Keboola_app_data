@@ -423,17 +423,26 @@ def render_split_section(scope_df, label):
     st.dataframe(styled, use_container_width=True, hide_index=True, height=320)
 
 
-def render_appversion_section(scope_df, label, selected_versions=None, top_n=15):
+def render_appversion_section(scope_df, label, selected_versions=None, top_n=15, min_day_uv=30):
     """Area chart of MBNXT UV share by app_version over time (from daily_appversion_split).
-    selected_versions=None → all builds, top-N + 'Other', 100%-stacked.
-    selected_versions=[...] → only those builds, each shown as its true % of the day's MBNXT UV."""
+    Days with < min_day_uv total MBNXT UV are hidden (pre-ramp INTL = a handful of test/QA accounts).
+    selected_versions=None → top-N + latest-day builds + 'Other', 100%-stacked.
+    selected_versions=[...] → only those builds, each as its true % of the day's MBNXT UV."""
     if scope_df is None or scope_df.empty:
         st.info(f"No app-version data for {label} yet.")
         return
     daily = scope_df.groupby(['event_date', 'app_version'], as_index=False)['uv'].sum()
-    # Always normalise against each day's FULL MBNXT UV (all versions) so a subset keeps its true share.
-    day_tot_all = daily.groupby('event_date')['uv'].transform('sum')
-    daily['pct'] = daily['uv'] / day_tot_all.replace(0, np.nan) * 100
+    day_tot = daily.groupby('event_date')['uv'].transform('sum')
+    # Drop low-volume days — pre-ramp INTL markets are only test/employee accounts (median ~1 UV/day),
+    # which the % normalisation would otherwise blow up to 100%.
+    daily = daily[day_tot >= min_day_uv].copy()
+    if daily.empty:
+        st.info(f"No day in this range reaches ≥{min_day_uv} MBNXT UV for {label} — "
+                f"pre-ramp INTL markets carry only test/QA accounts.")
+        return
+    # Normalise against each day's FULL MBNXT UV (all versions) so a subset keeps its true share.
+    day_tot = daily.groupby('event_date')['uv'].transform('sum')
+    daily['pct'] = daily['uv'] / day_tot.replace(0, np.nan) * 100
 
     if selected_versions:
         plot = daily[daily['app_version'].isin(selected_versions)].copy()
@@ -442,15 +451,19 @@ def render_appversion_section(scope_df, label, selected_versions=None, top_n=15)
             return
         plot = plot.rename(columns={'app_version': 'version'})
         order = sorted(plot['version'].unique())
-        note = f"{len(selected_versions)} build(s) selected · each shown as % of the day's MBNXT UV."
+        note = f"{len(selected_versions)} build(s) selected · each as % of the day's MBNXT UV · days <{min_day_uv} UV hidden."
     else:
         totals = daily.groupby('app_version')['uv'].sum().sort_values(ascending=False)
         keep = set(totals.head(top_n).index)
+        # always surface the latest day's leading builds so a newly-ramping version (e.g. 26.10) isn't buried in 'Other'
+        latest_day = daily['event_date'].max()
+        keep |= set(daily[daily['event_date'] == latest_day].groupby('app_version')['uv'].sum()
+                    .sort_values(ascending=False).head(8).index)
         daily['version'] = daily['app_version'].where(daily['app_version'].isin(keep), 'Other')
         plot = daily.groupby(['event_date', 'version'], as_index=False).agg(uv=('uv', 'sum'), pct=('pct', 'sum'))
         has_other = bool((plot['version'] == 'Other').any())
         order = sorted([v for v in plot['version'].unique() if v != 'Other']) + (['Other'] if has_other else [])
-        note = f"All builds · top {top_n} shown, rest grouped as 'Other'."
+        note = f"Top {top_n} + latest-day builds shown, rest 'Other' · days <{min_day_uv} MBNXT UV hidden."
 
     fig = px.area(
         plot.sort_values('event_date'), x='event_date', y='pct', color='version',
