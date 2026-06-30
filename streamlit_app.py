@@ -504,11 +504,10 @@ def render_date_range(scope_dfs, key):
     return pd.Timestamp(dmin), pd.Timestamp(dmax)
 
 
-tab_yoy, tab_cohort, tab_split, tab_split_us, tab_kai, tab_docs = st.tabs([
+tab_yoy, tab_cohort, tab_split, tab_kai, tab_docs = st.tabs([
     "📈 YoY Trends",
     "🔄 Cohort Analysis",
     "🔀 Traffic Split",
-    "🇺🇸 Traffic Split — US",
     "🤖 Ask Kai",
     "📚 Docs"
 ])
@@ -915,50 +914,9 @@ with tab_split:
         _sel_v = None if ('All' in _picked or not _picked) else _picked
         render_appversion_section(intl_av, f"INTL / {selected_country}", selected_versions=_sel_v)
 
-
-with tab_split_us:
-    st.caption("US app traffic. **Top:** MBNXT vs Legacy share of app UV (from MSA S2). "
-               "**Bottom:** MBNXT app-version mix. Fixed to US — the Country filter does not apply; Client Platform does.")
-    sel_os_split = selected_os or os_opts_all
-
-    us_split_all = uv_split_raw[
-        (uv_split_raw['country_code'] == 'US') &
-        (uv_split_raw['operating_system'].isin(sel_os_split))
-    ] if not uv_split_raw.empty else uv_split_raw
-    us_av_all = appver_raw[
-        (appver_raw['country_code'] == 'US') &
-        (appver_raw['operating_system'].isin(sel_os_split))
-    ] if not appver_raw.empty else appver_raw
-
-    d_start, d_end = render_date_range([us_split_all, us_av_all], key="dr_us")
-    if d_start is not None:
-        us_split = us_split_all[(us_split_all['event_date'] >= d_start) & (us_split_all['event_date'] <= d_end)] if not us_split_all.empty else us_split_all
-        us_av = us_av_all[(us_av_all['event_date'] >= d_start) & (us_av_all['event_date'] <= d_end)] if not us_av_all.empty else us_av_all
-    else:
-        us_split, us_av = us_split_all, us_av_all
-
-    # ---- MBNXT vs Legacy share (US) ----
-    st.markdown(f"### 🔀 MBNXT vs Legacy — US · {'+'.join(sel_os_split)}")
-    if uv_split_raw.empty:
-        st.warning("Traffic split table not yet available — run the **INTL+US app traffic split (S2 UV)** "
-                   "transformation (output: `daily_uv_split`).")
-    else:
-        st.caption("% of total app UV over the selected date range.")
-        render_split_section(us_split, "US")
-
     st.markdown("---")
-
-    # ---- App-version mix (US) ----
-    st.markdown(f"### 📲 App Version Mix — US · {'+'.join(sel_os_split)}")
-    if appver_raw.empty:
-        st.warning("App-version table not yet available — run the **INTL+US app traffic split by app version** "
-                   "transformation (output: `daily_appversion_split`).")
-    else:
-        st.caption("US MBNXT app builds as % of daily MBNXT UV — the version migration waves.")
-        _av_opts_us = sorted(us_av['app_version'].dropna().unique().tolist()) if not us_av.empty else []
-        _picked_us = st.multiselect("App version", options=['All'] + _av_opts_us, default=['All'], key="av_us")
-        _sel_v_us = None if ('All' in _picked_us or not _picked_us) else _picked_us
-        render_appversion_section(us_av, "US", selected_versions=_sel_v_us)
+    st.caption("🇺🇸 US rollout now lives in its own app → "
+               "https://mbnxt-us-app-rollout-14597537.hub.groupon.keboola.cloud")
 
 
 # =============================================================================
