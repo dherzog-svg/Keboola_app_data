@@ -459,6 +459,25 @@ def render_appversion_section(scope_df, label, top_n=15):
     )
 
 
+def render_date_range(scope_dfs, key):
+    """Inline date-range picker spanning the given dataframes. Returns (start_ts, end_ts) Timestamps,
+    or (None, None) when no data is available."""
+    series = [d['event_date'] for d in scope_dfs if d is not None and not d.empty]
+    if not series:
+        return None, None
+    alld = pd.concat(series)
+    dmin, dmax = alld.min().date(), alld.max().date()
+    if dmin == dmax:
+        st.caption(f"Date: {dmin:%Y-%m-%d} (single day available)")
+        return pd.Timestamp(dmin), pd.Timestamp(dmax)
+    sel = st.date_input(
+        "Date range", value=(dmin, dmax), min_value=dmin, max_value=dmax, key=key,
+    )
+    if isinstance(sel, (tuple, list)) and len(sel) == 2:
+        return pd.Timestamp(sel[0]), pd.Timestamp(sel[1])
+    return pd.Timestamp(dmin), pd.Timestamp(dmax)
+
+
 tab_yoy, tab_cohort, tab_split, tab_split_us, tab_kai, tab_docs = st.tabs([
     "📈 YoY Trends",
     "🔄 Cohort Analysis",
@@ -831,21 +850,30 @@ with tab_split:
                "**Bottom:** MBNXT app-version mix. Sidebar Country + Client Platform filters apply.")
     sel_os_split = selected_os or os_opts_all
 
-    # ---- MBNXT vs Legacy share (INTL, last 7 days) ----
+    intl_split_all = uv_split_raw[
+        (uv_split_raw['country_code'] == selected_country) &
+        (uv_split_raw['operating_system'].isin(sel_os_split))
+    ] if not uv_split_raw.empty else uv_split_raw
+    intl_av_all = appver_raw[
+        (appver_raw['country_code'] == selected_country) &
+        (appver_raw['operating_system'].isin(sel_os_split))
+    ] if not appver_raw.empty else appver_raw
+
+    d_start, d_end = render_date_range([intl_split_all, intl_av_all], key="dr_intl")
+    if d_start is not None:
+        intl_split = intl_split_all[(intl_split_all['event_date'] >= d_start) & (intl_split_all['event_date'] <= d_end)] if not intl_split_all.empty else intl_split_all
+        intl_av = intl_av_all[(intl_av_all['event_date'] >= d_start) & (intl_av_all['event_date'] <= d_end)] if not intl_av_all.empty else intl_av_all
+    else:
+        intl_split, intl_av = intl_split_all, intl_av_all
+
+    # ---- MBNXT vs Legacy share (INTL) ----
     st.markdown(f"### 🔀 MBNXT vs Legacy — {selected_country} · {'+'.join(sel_os_split)}")
     if uv_split_raw.empty:
         st.warning("Traffic split table not yet available — run the **INTL+US app traffic split (S2 UV)** "
                    "transformation (output: `daily_uv_split`).")
     else:
-        st.caption("Last 7 days. % of total app UV.")
-        max_date = uv_split_raw['event_date'].max()
-        cutoff_7d = max_date - pd.Timedelta(days=6)
-        intl_df = uv_split_raw[
-            (uv_split_raw['country_code'] == selected_country) &
-            (uv_split_raw['operating_system'].isin(sel_os_split)) &
-            (uv_split_raw['event_date'] >= cutoff_7d)
-        ]
-        render_split_section(intl_df, f"INTL / {selected_country}")
+        st.caption("% of total app UV over the selected date range.")
+        render_split_section(intl_split, f"INTL / {selected_country}")
 
     st.markdown("---")
 
@@ -856,10 +884,6 @@ with tab_split:
                    "transformation (output: `daily_appversion_split`).")
     else:
         st.caption("MBNXT app builds as % of daily MBNXT UV. INTL markets get MBNXT from the June launch (build 26.10).")
-        intl_av = appver_raw[
-            (appver_raw['country_code'] == selected_country) &
-            (appver_raw['operating_system'].isin(sel_os_split))
-        ]
         render_appversion_section(intl_av, f"INTL / {selected_country}")
 
 
@@ -868,18 +892,30 @@ with tab_split_us:
                "**Bottom:** MBNXT app-version mix. Fixed to US — the Country filter does not apply; Client Platform does.")
     sel_os_split = selected_os or os_opts_all
 
+    us_split_all = uv_split_raw[
+        (uv_split_raw['country_code'] == 'US') &
+        (uv_split_raw['operating_system'].isin(sel_os_split))
+    ] if not uv_split_raw.empty else uv_split_raw
+    us_av_all = appver_raw[
+        (appver_raw['country_code'] == 'US') &
+        (appver_raw['operating_system'].isin(sel_os_split))
+    ] if not appver_raw.empty else appver_raw
+
+    d_start, d_end = render_date_range([us_split_all, us_av_all], key="dr_us")
+    if d_start is not None:
+        us_split = us_split_all[(us_split_all['event_date'] >= d_start) & (us_split_all['event_date'] <= d_end)] if not us_split_all.empty else us_split_all
+        us_av = us_av_all[(us_av_all['event_date'] >= d_start) & (us_av_all['event_date'] <= d_end)] if not us_av_all.empty else us_av_all
+    else:
+        us_split, us_av = us_split_all, us_av_all
+
     # ---- MBNXT vs Legacy share (US) ----
     st.markdown(f"### 🔀 MBNXT vs Legacy — US · {'+'.join(sel_os_split)}")
     if uv_split_raw.empty:
         st.warning("Traffic split table not yet available — run the **INTL+US app traffic split (S2 UV)** "
                    "transformation (output: `daily_uv_split`).")
     else:
-        st.caption("US app ramp since 2026-04-01.")
-        us_df = uv_split_raw[
-            (uv_split_raw['country_code'] == 'US') &
-            (uv_split_raw['operating_system'].isin(sel_os_split))
-        ]
-        render_split_section(us_df, "US")
+        st.caption("% of total app UV over the selected date range.")
+        render_split_section(us_split, "US")
 
     st.markdown("---")
 
@@ -890,10 +926,6 @@ with tab_split_us:
                    "transformation (output: `daily_appversion_split`).")
     else:
         st.caption("US MBNXT app builds as % of daily MBNXT UV — the version migration waves.")
-        us_av = appver_raw[
-            (appver_raw['country_code'] == 'US') &
-            (appver_raw['operating_system'].isin(sel_os_split))
-        ]
         render_appversion_section(us_av, "US")
 
 
