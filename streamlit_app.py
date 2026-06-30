@@ -423,11 +423,11 @@ def render_split_section(scope_df, label):
     st.dataframe(styled, use_container_width=True, hide_index=True, height=320)
 
 
-def render_appversion_section(scope_df, label, selected_versions=None, top_n=15, min_day_uv=30):
-    """Area chart of MBNXT UV share by app_version over time (from daily_appversion_split).
-    Days with < min_day_uv total MBNXT UV are hidden (pre-ramp INTL = a handful of test/QA accounts).
-    selected_versions=None → top-N + latest-day builds + 'Other', 100%-stacked.
-    selected_versions=[...] → only those builds, each as its true % of the day's MBNXT UV."""
+def render_appversion_section(scope_df, label, selected_versions=None, min_day_uv=30):
+    """100%-stacked area of MBNXT UV share by app_version over time (from daily_appversion_split).
+    Every build is shown individually (no 'Other'); the date×version grid is densified (missing → 0)
+    so the stack fills cleanly to 100% with no gaps, and versions stack in first-appearance order.
+    Days with < min_day_uv total MBNXT UV are hidden (pre-ramp INTL = a handful of test/QA accounts)."""
     if scope_df is None or scope_df.empty:
         st.info(f"No app-version data for {label} yet.")
         return
@@ -443,30 +443,29 @@ def render_appversion_section(scope_df, label, selected_versions=None, top_n=15,
     # Normalise against each day's FULL MBNXT UV (all versions) so a subset keeps its true share.
     day_tot = daily.groupby('event_date')['uv'].transform('sum')
     daily['pct'] = daily['uv'] / day_tot.replace(0, np.nan) * 100
+    daily = daily.rename(columns={'app_version': 'version'})
 
     if selected_versions:
-        plot = daily[daily['app_version'].isin(selected_versions)].copy()
+        plot = daily[daily['version'].isin(selected_versions)].copy()
         if plot.empty:
             st.info("No data for the selected app version(s) in this range.")
             return
-        plot = plot.rename(columns={'app_version': 'version'})
-        order = sorted(plot['version'].unique())
         note = f"{len(selected_versions)} build(s) selected · each as % of the day's MBNXT UV · days <{min_day_uv} UV hidden."
     else:
-        totals = daily.groupby('app_version')['uv'].sum().sort_values(ascending=False)
-        keep = set(totals.head(top_n).index)
-        # always surface the latest day's leading builds so a newly-ramping version (e.g. 26.10) isn't buried in 'Other'
-        latest_day = daily['event_date'].max()
-        keep |= set(daily[daily['event_date'] == latest_day].groupby('app_version')['uv'].sum()
-                    .sort_values(ascending=False).head(8).index)
-        daily['version'] = daily['app_version'].where(daily['app_version'].isin(keep), 'Other')
-        plot = daily.groupby(['event_date', 'version'], as_index=False).agg(uv=('uv', 'sum'), pct=('pct', 'sum'))
-        has_other = bool((plot['version'] == 'Other').any())
-        order = sorted([v for v in plot['version'].unique() if v != 'Other']) + (['Other'] if has_other else [])
-        note = f"Top {top_n} + latest-day builds shown, rest 'Other' · days <{min_day_uv} MBNXT UV hidden."
+        plot = daily.copy()
+        note = f"All builds · days <{min_day_uv} MBNXT UV hidden."
+
+    # Stack versions in first-appearance order (newer builds ride on top → migration-wave look).
+    appear = daily.groupby('version')['event_date'].min().sort_values()
+    order = [v for v in appear.index.tolist() if v in set(plot['version'])]
+    # Densify: every date × version present, missing filled with 0, so px.area stacks continuously to 100%.
+    dates = sorted(plot['event_date'].unique())
+    full_idx = pd.MultiIndex.from_product([dates, order], names=['event_date', 'version'])
+    plot = (plot.set_index(['event_date', 'version'])[['uv', 'pct']]
+                .reindex(full_idx, fill_value=0).reset_index())
 
     fig = px.area(
-        plot.sort_values('event_date'), x='event_date', y='pct', color='version',
+        plot, x='event_date', y='pct', color='version',
         category_orders={'version': order},
         labels={'pct': '% of Total UV', 'event_date': 'Day of Event Date', 'version': 'App Version'},
     )
@@ -477,7 +476,7 @@ def render_appversion_section(scope_df, label, selected_versions=None, top_n=15,
     st.plotly_chart(fig, use_container_width=True)
 
     latest = plot['event_date'].max()
-    lt = plot[plot['event_date'] == latest].sort_values('uv', ascending=False)[['version', 'uv', 'pct']].copy()
+    lt = plot[(plot['event_date'] == latest) & (plot['uv'] > 0)].sort_values('uv', ascending=False)[['version', 'uv', 'pct']].copy()
     lt = lt.rename(columns={'version': 'App Version', 'uv': 'UV', 'pct': '% of day'})
     st.caption(f"Latest day: {latest.strftime('%Y-%m-%d')} · {note}")
     st.dataframe(
