@@ -338,12 +338,16 @@ with st.sidebar:
     st.markdown("## 🌍 INTL Markets Analytics")
     st.markdown("---")
 
-    # Country filter — shared across Cohort + YoY tabs
-    all_countries = sorted(set(
+    # Country filter — shared across Cohort + YoY tabs.
+    # Restricted to the ramped-up INTL markets only (GB + Spain); other countries
+    # carry only pre-ramp test/QA accounts and are not meaningful for the ramp read.
+    RAMPED_COUNTRIES = ['GB', 'ES']
+    present = set(
         list(coh_df_raw['country'].dropna().unique() if not coh_df_raw.empty else []) +
         list(yoy_df_raw['country_code'].dropna().unique() if not yoy_df_raw.empty else [])
-    ))
-    default_country = 'GB' if 'GB' in all_countries else (all_countries[0] if all_countries else None)
+    )
+    all_countries = [c for c in RAMPED_COUNTRIES if c in present] or RAMPED_COUNTRIES
+    default_country = 'GB' if 'GB' in all_countries else all_countries[0]
     st.markdown('<p class="section-label">Country</p>', unsafe_allow_html=True)
     selected_country = st.selectbox(
         "Country", all_countries,
