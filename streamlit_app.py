@@ -346,7 +346,7 @@ with st.sidebar:
         list(coh_df_raw['country'].dropna().unique() if not coh_df_raw.empty else []) +
         list(yoy_df_raw['country_code'].dropna().unique() if not yoy_df_raw.empty else [])
     )
-    all_countries = [c for c in RAMPED_COUNTRIES if c in present] or RAMPED_COUNTRIES
+    all_countries = sorted([c for c in RAMPED_COUNTRIES if c in present]) or sorted(RAMPED_COUNTRIES)
     default_country = 'GB' if 'GB' in all_countries else all_countries[0]
     st.markdown('<p class="section-label">Country</p>', unsafe_allow_html=True)
     selected_country = st.selectbox(
