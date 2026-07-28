@@ -339,14 +339,21 @@ with st.sidebar:
     st.markdown("---")
 
     # Country filter — shared across Cohort + YoY tabs.
-    # Ramped-up INTL markets: GB + Spain (live from Jun-25), DE + France (26.11, live ~Jul-15).
-    # Other countries carry only pre-ramp test/QA accounts and are not meaningful for the ramp read.
-    RAMPED_COUNTRIES = ['GB', 'ES', 'DE', 'FR']
+    # Scope = every INTL market present in the data, i.e. all countries except North America
+    # (US, and Canada in both its CA and QC forms — the upstream transformations use the same
+    # NOT IN ('US','QC') definition of INTL).
+    # Widened 2026-07-28 from the hardcoded GB/ES/DE/FR list ahead of the wide MBNXT ramp,
+    # which takes UK/ES/DE/FR to 100% and launches batch 3 (PL, NL, AU, IT, IE, AE) straight
+    # at 100%. Deriving the list from the data means a new market appears in the dropdown by
+    # itself the moment it shows up upstream — no code change per country.
+    # NOTE: YoY populates for every market immediately; the Cohort tab only fills once a
+    # market is added to the transformation's `mbnxt_version_map` and its build ships.
+    EXCLUDED_COUNTRIES = {'US', 'CA', 'QC'}
     present = set(
         list(coh_df_raw['country'].dropna().unique() if not coh_df_raw.empty else []) +
         list(yoy_df_raw['country_code'].dropna().unique() if not yoy_df_raw.empty else [])
     )
-    all_countries = sorted([c for c in RAMPED_COUNTRIES if c in present]) or sorted(RAMPED_COUNTRIES)
+    all_countries = sorted(c for c in present if c and c not in EXCLUDED_COUNTRIES) or ['GB']
     default_country = 'GB' if 'GB' in all_countries else all_countries[0]
     st.markdown('<p class="section-label">Country</p>', unsafe_allow_html=True)
     selected_country = st.selectbox(
